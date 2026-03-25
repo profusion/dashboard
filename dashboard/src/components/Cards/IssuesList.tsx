@@ -40,6 +40,120 @@ import { MemoizedSectionError } from '@/components/DetailsPages/SectionError';
 
 import { GroupedTestStatus } from '@/components/Status/Status';
 
+type IssueItemProps = {
+  issue: TIssue;
+  extraDetails?: IssueExtraDetailsDict[string];
+  extraDetailsLoading?: boolean;
+  isFirstIncident: boolean;
+  getIssueLink: (id: string, version: number) => LinkProps;
+  issueFilterSection: TFilterObjectsKeys;
+  diffFilter: TFilter;
+};
+
+const IssueItem = ({
+  issue,
+  extraDetails,
+  extraDetailsLoading,
+  isFirstIncident,
+  getIssueLink,
+  issueFilterSection,
+  diffFilter,
+}: IssueItemProps): JSX.Element => {
+  const { formatMessage } = useIntl();
+
+  const currentVersion = extraDetails?.versions[issue.version];
+  const first_seen = extraDetails?.first_incident.first_seen;
+  const counts = issue.incidents_info;
+
+  const tagPills = currentVersion?.tags?.map(tag => (
+    <BranchBadge key={tag} tag={tag} />
+  ));
+
+  if (isFirstIncident) {
+    tagPills?.unshift(
+      <Tooltip key="starburst">
+        <TooltipTrigger className="cursor-default">
+          <div className="starburst bg-red aspect-square w-[24px]" />
+        </TooltipTrigger>
+        <TooltipContent>
+          <FormattedMessage id="issue.newIssue" />
+        </TooltipContent>
+      </Tooltip>,
+    );
+  }
+
+  const hasRightContent =
+    !!issue.report_url || issue.id !== UNCATEGORIZED_STRING;
+
+  return (
+    <div
+      className={`flex w-full gap-4 bg-amber-200 ${hasRightContent ? 'justify-between' : 'justify-start'}`}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="min-w-0 overflow-hidden">
+          <FilterLink
+            filterSection={issueFilterSection}
+            filterValue={getIssueFilterLabel(issue)}
+            diffFilter={diffFilter}
+          >
+            <div className="flex items-center gap-2 text-sm">
+              <GroupedTestStatus
+                pass={counts.PASS}
+                fail={counts.FAIL}
+                nullStatus={counts.NULL}
+                error={counts.ERROR}
+                done={counts.DONE}
+                miss={counts.MISS}
+                skip={counts.SKIP}
+              />
+              <ListingItem
+                showNumber={false}
+                hasBottomBorder
+                text={
+                  issue.comment ?? formatMessage({ id: 'issue.uncategorized' })
+                }
+                tooltip={issue.comment}
+              />
+              {extraDetailsLoading ? (
+                <LoadingCircle className="mx-2" />
+              ) : (
+                first_seen && (
+                  <span className="pb-1 text-nowrap text-gray-600">
+                    <TooltipDateTime
+                      dateTime={first_seen}
+                      lineBreak={true}
+                      showRelative={true}
+                      message={`• ${formatMessage({ id: 'issue.firstSeen' })}: `}
+                    />
+                  </span>
+                )
+              )}
+            </div>
+          </FilterLink>
+        </div>
+        {tagPills && !extraDetailsLoading && (
+          <div className="flex shrink-0 gap-3">{...tagPills}</div>
+        )}
+      </div>
+      {hasRightContent && (
+        <div className="flex shrink-0 items-center gap-4">
+          {issue.report_url && (
+            <LinkWithIcon
+              link={issue.report_url}
+              icon={<LinkIcon className="h-4 w-4" />}
+            />
+          )}
+          {issue.id !== UNCATEGORIZED_STRING && (
+            <MemoizedMoreDetailsIconLink
+              linkProps={getIssueLink(issue.id, issue.version)}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface IIssuesList {
   issues: TIssue[];
   failedWithUnknownIssues?: number;
@@ -136,104 +250,20 @@ const IssuesList = ({
   ) : (
     <DumbListingContent>
       {sortedIssues.map(issue => {
-        const currentExtraDetailsId = issueExtraDetails?.[issue.id];
-        const currentExtraDetailsVersion =
-          currentExtraDetailsId?.['versions'][issue.version];
-
-        const tagPills = currentExtraDetailsVersion?.tags?.map(tag => {
-          return <BranchBadge key={tag} tag={tag} />;
-        });
-
-        if (
-          detailsId === currentExtraDetailsId?.first_incident.git_commit_hash
-        ) {
-          tagPills?.unshift(
-            <Tooltip>
-              <TooltipTrigger className="cursor-default">
-                <div className="starburst bg-red aspect-square w-[24px]"></div>
-              </TooltipTrigger>
-              <TooltipContent>
-                <FormattedMessage id="issue.newIssue" />
-              </TooltipContent>
-            </Tooltip>,
-          );
-        }
-
-        const first_seen = currentExtraDetailsId?.first_incident.first_seen;
-
-        const counts = issue.incidents_info;
-        const countElement = (
-          <GroupedTestStatus
-            pass={counts.PASS}
-            fail={counts.FAIL}
-            nullStatus={counts.NULL}
-            error={counts.ERROR}
-            done={counts.DONE}
-            miss={counts.MISS}
-            skip={counts.SKIP}
-          />
-        );
-
+        const extraDetails = issueExtraDetails?.[issue.id];
+        const isFirstIncident =
+          detailsId === extraDetails?.first_incident.git_commit_hash;
         return (
-          <div
+          <IssueItem
             key={`${issue.id}${issue.version}`}
-            className="flex w-full justify-between gap-4"
-          >
-            <div className="flex items-center gap-3">
-              <div className="overflow-hidden">
-                <FilterLink
-                  filterSection={issueFilterSection}
-                  filterValue={getIssueFilterLabel(issue)}
-                  diffFilter={diffFilter}
-                >
-                  <span className="flex items-center text-sm">
-                    <div className="flex gap-2">
-                      {countElement}
-                      <ListingItem
-                        showNumber={false}
-                        hasBottomBorder
-                        text={
-                          issue.comment ??
-                          formatMessage({ id: 'issue.uncategorized' })
-                        }
-                        tooltip={issue.comment}
-                      />
-                    </div>
-                    {extraDetailsLoading ? (
-                      <LoadingCircle className="mx-2" />
-                    ) : (
-                      first_seen && (
-                        <span className="pb-1 text-nowrap text-gray-600">
-                          <TooltipDateTime
-                            dateTime={first_seen}
-                            lineBreak={true}
-                            showRelative={true}
-                            message={`• ${formatMessage({ id: 'issue.firstSeen' })}: `}
-                          />
-                        </span>
-                      )
-                    )}
-                  </span>
-                </FilterLink>
-              </div>
-              {tagPills && !extraDetailsLoading && (
-                <div className="flex gap-3">{...tagPills}</div>
-              )}
-            </div>
-            <div className="flex items-center gap-4">
-              {issue.report_url && (
-                <LinkWithIcon
-                  link={issue.report_url}
-                  icon={<LinkIcon className="h-4 w-4" />}
-                />
-              )}
-              {issue.id !== UNCATEGORIZED_STRING && (
-                <MemoizedMoreDetailsIconLink
-                  linkProps={getIssueLink(issue.id, issue.version)}
-                />
-              )}
-            </div>
-          </div>
+            issue={issue}
+            extraDetails={extraDetails}
+            extraDetailsLoading={extraDetailsLoading}
+            isFirstIncident={isFirstIncident}
+            getIssueLink={getIssueLink}
+            issueFilterSection={issueFilterSection}
+            diffFilter={diffFilter}
+          />
         );
       })}
       {failedWithUnknownIssues && (
