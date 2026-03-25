@@ -62,7 +62,7 @@ const IssueItem = ({
   const { formatMessage } = useIntl();
 
   const currentVersion = extraDetails?.versions[issue.version];
-  const first_seen = extraDetails?.first_incident.first_seen;
+  const firstSeen = extraDetails?.first_incident.first_seen;
   const counts = issue.incidents_info;
 
   const tagPills = currentVersion?.tags?.map(tag => (
@@ -82,7 +82,7 @@ const IssueItem = ({
     );
   }
 
-  const hasMeta = !extraDetailsLoading && !!(first_seen || tagPills?.length);
+  const hasMeta = !extraDetailsLoading && !!(firstSeen || tagPills?.length);
 
   return (
     <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3">
@@ -132,10 +132,10 @@ const IssueItem = ({
       {/* Row 2, Col 2: first_seen + tags below text, col 1 and 3 stay empty */}
       {hasMeta && (
         <div className="col-start-2 flex flex-wrap items-center gap-2 pb-1">
-          {first_seen && (
+          {firstSeen && (
             <span className="text-sm text-nowrap text-gray-600">
               <TooltipDateTime
-                dateTime={first_seen}
+                dateTime={firstSeen}
                 lineBreak={true}
                 showRelative={true}
                 message={`• ${formatMessage({ id: 'issue.firstSeen' })}: `}
