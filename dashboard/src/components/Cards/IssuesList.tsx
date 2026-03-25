@@ -82,71 +82,68 @@ const IssueItem = ({
     );
   }
 
-  const hasRightContent =
-    !!issue.report_url || issue.id !== UNCATEGORIZED_STRING;
+  const hasMeta = !extraDetailsLoading && !!(first_seen || tagPills?.length);
 
   return (
-    <div
-      className={`flex w-full gap-4 bg-amber-200 ${hasRightContent ? 'justify-between' : 'justify-start'}`}
-    >
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="min-w-0 overflow-hidden">
-          <FilterLink
-            filterSection={issueFilterSection}
-            filterValue={getIssueFilterLabel(issue)}
-            diffFilter={diffFilter}
-          >
-            <div className="flex items-center gap-2 text-sm">
-              <GroupedTestStatus
-                pass={counts.PASS}
-                fail={counts.FAIL}
-                nullStatus={counts.NULL}
-                error={counts.ERROR}
-                done={counts.DONE}
-                miss={counts.MISS}
-                skip={counts.SKIP}
-              />
-              <ListingItem
-                showNumber={false}
-                hasBottomBorder
-                text={
-                  issue.comment ?? formatMessage({ id: 'issue.uncategorized' })
-                }
-                tooltip={issue.comment}
-              />
-              {extraDetailsLoading ? (
-                <LoadingCircle className="mx-2" />
-              ) : (
-                first_seen && (
-                  <span className="pb-1 text-nowrap text-gray-600">
-                    <TooltipDateTime
-                      dateTime={first_seen}
-                      lineBreak={true}
-                      showRelative={true}
-                      message={`• ${formatMessage({ id: 'issue.firstSeen' })}: `}
-                    />
-                  </span>
-                )
-              )}
-            </div>
-          </FilterLink>
+    <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3">
+      {/* Col 1: status circles — fixed width */}
+      <GroupedTestStatus
+        pass={counts.PASS}
+        fail={counts.FAIL}
+        nullStatus={counts.NULL}
+        error={counts.ERROR}
+        done={counts.DONE}
+        miss={counts.MISS}
+        skip={counts.SKIP}
+      />
+
+      {/* Col 2: issue text — takes remaining space, truncates */}
+      <FilterLink
+        filterSection={issueFilterSection}
+        filterValue={getIssueFilterLabel(issue)}
+        diffFilter={diffFilter}
+      >
+        <div className="min-w-0 text-sm">
+          <ListingItem
+            showNumber={false}
+            hasBottomBorder
+            text={issue.comment ?? formatMessage({ id: 'issue.uncategorized' })}
+            tooltip={issue.comment}
+          />
         </div>
-        {tagPills && !extraDetailsLoading && (
-          <div className="flex shrink-0 gap-3">{...tagPills}</div>
+      </FilterLink>
+
+      {/* Col 3: action icons — fixed width */}
+      <div className="flex items-center gap-3">
+        {extraDetailsLoading && <LoadingCircle />}
+        {!extraDetailsLoading && issue.report_url && (
+          <LinkWithIcon
+            link={issue.report_url}
+            icon={<LinkIcon className="h-4 w-4" />}
+          />
+        )}
+        {!extraDetailsLoading && issue.id !== UNCATEGORIZED_STRING && (
+          <MemoizedMoreDetailsIconLink
+            linkProps={getIssueLink(issue.id, issue.version)}
+          />
         )}
       </div>
-      {hasRightContent && (
-        <div className="flex shrink-0 items-center gap-4">
-          {issue.report_url && (
-            <LinkWithIcon
-              link={issue.report_url}
-              icon={<LinkIcon className="h-4 w-4" />}
-            />
+
+      {/* Row 2, Col 2: first_seen + tags below text, col 1 and 3 stay empty */}
+      {hasMeta && (
+        <div className="col-start-2 flex flex-wrap items-center gap-2 pb-1">
+          {first_seen && (
+            <span className="text-sm text-nowrap text-gray-600">
+              <TooltipDateTime
+                dateTime={first_seen}
+                lineBreak={true}
+                showRelative={true}
+                message={`• ${formatMessage({ id: 'issue.firstSeen' })}: `}
+              />
+            </span>
           )}
-          {issue.id !== UNCATEGORIZED_STRING && (
-            <MemoizedMoreDetailsIconLink
-              linkProps={getIssueLink(issue.id, issue.version)}
-            />
+          {tagPills && (
+            <div className="flex flex-wrap gap-2">{...tagPills}</div>
           )}
         </div>
       )}
