@@ -105,7 +105,7 @@ const IssueItem = ({
         filterValue={getIssueFilterLabel(issue)}
         diffFilter={diffFilter}
       >
-        <div className="min-w-0 text-sm">
+        <div className="max-w-5/6 min-w-0 text-sm sm:max-w-3/4">
           <ListingItem
             showNumber={false}
             hasBottomBorder
