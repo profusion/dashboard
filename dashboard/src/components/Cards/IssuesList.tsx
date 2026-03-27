@@ -44,7 +44,7 @@ type IssueItemProps = {
   issue: TIssue;
   extraDetails?: IssueExtraDetailsDict[string];
   extraDetailsLoading?: boolean;
-  isFirstIncident: boolean;
+  detailsId?: string;
   getIssueLink: (id: string, version: number) => LinkProps;
   issueFilterSection: TFilterObjectsKeys;
   diffFilter: TFilter;
@@ -54,13 +54,15 @@ const IssueItem = ({
   issue,
   extraDetails,
   extraDetailsLoading,
-  isFirstIncident,
+  detailsId,
   getIssueLink,
   issueFilterSection,
   diffFilter,
 }: IssueItemProps): JSX.Element => {
   const { formatMessage } = useIntl();
 
+  const isFirstIncident =
+    detailsId === extraDetails?.first_incident.git_commit_hash;
   const currentVersion = extraDetails?.versions[issue.version];
   const firstSeen = extraDetails?.first_incident.first_seen;
   const counts = issue.incidents_info;
@@ -246,23 +248,18 @@ const IssuesList = ({
     />
   ) : (
     <DumbListingContent>
-      {sortedIssues.map(issue => {
-        const extraDetails = issueExtraDetails?.[issue.id];
-        const isFirstIncident =
-          detailsId === extraDetails?.first_incident.git_commit_hash;
-        return (
-          <IssueItem
-            key={`${issue.id}${issue.version}`}
-            issue={issue}
-            extraDetails={extraDetails}
-            extraDetailsLoading={extraDetailsLoading}
-            isFirstIncident={isFirstIncident}
-            getIssueLink={getIssueLink}
-            issueFilterSection={issueFilterSection}
-            diffFilter={diffFilter}
-          />
-        );
-      })}
+      {sortedIssues.map(issue => (
+        <IssueItem
+          key={`${issue.id}${issue.version}`}
+          issue={issue}
+          extraDetails={issueExtraDetails?.[issue.id]}
+          extraDetailsLoading={extraDetailsLoading}
+          detailsId={detailsId}
+          getIssueLink={getIssueLink}
+          issueFilterSection={issueFilterSection}
+          diffFilter={diffFilter}
+        />
+      ))}
       {failedWithUnknownIssues && (
         <FilterLink
           filterSection={issueFilterSection}
