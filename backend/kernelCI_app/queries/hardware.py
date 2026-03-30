@@ -1,6 +1,7 @@
 from typing import TypedDict
 from datetime import datetime
 from django.db import connection
+from itertools import repeat
 
 from kernelCI_app.helpers.database import dict_fetchall
 from kernelCI_app.cache import get_query_cache, set_query_cache
@@ -339,15 +340,145 @@ def get_hardware_details_data(
     return records
 
 
+def get_hardware_details_summary(
+    *,
+    hardware_id: str,
+    origin: str,
+    trees_with_selected_commits: list[Tree],
+    start_datetime: datetime,
+    end_datetime: datetime,
+):
+
+    cache_key = "hardwareDetailsSummary"
+
+    tests_cache_params = {
+        "hardware_id": hardware_id,
+        "origin": origin,
+        "trees": trees_with_selected_commits,
+        "start_date": start_datetime,
+        "end_date": end_datetime,
+    }
+
+    query_rows = get_query_cache(cache_key, tests_cache_params)
+
+    if query_rows:
+        return query_rows
+
+    commit_hashes = [tree.head_git_commit_hash for tree in trees_with_selected_commits]
+
+    query = """
+           (SELECT
+                 COUNT(distinct builds.id) AS count,
+                 checkouts.origin,
+                 builds.status AS status,
+                 count(incidents.id) AS known_issues,
+                 array[builds.compiler, builds.architecture] AS compiler_arch,
+                 builds.config_name,
+                 builds.misc->>'runtime' AS lab,
+                 tests.environment_misc->>'platform' AS platform,
+                 tests.environment_compatible,
+                 checkouts.origin,
+                 checkouts.tree_name,
+                 checkouts.git_repository_url,
+                 checkouts.git_commit_tags,
+                 checkouts.git_commit_name,
+                 checkouts.git_repository_branch,
+                 checkouts.git_commit_hash,
+                 true AS is_build,
+                 false AS is_test,
+                 false AS is_boot
+             FROM
+                builds
+            INNER JOIN tests ON
+                tests.build_id = builds.id
+            INNER JOIN checkouts ON
+                builds.checkout_id = checkouts.id
+            LEFT OUTER JOIN incidents ON
+                builds.id = incidents.build_id
+            WHERE
+                (
+                    builds.config_name IS NOT NULL
+                    AND builds.id not like 'maestro:dummy_%%'
+                    AND (tests.environment_compatible @> ARRAY[%s]::TEXT[]
+                    OR tests.environment_misc ->> 'platform' = %s)
+                )
+                AND builds.origin = %s
+                AND builds.start_time >= %s
+                AND builds.start_time <= %s
+                AND checkouts.git_commit_hash IN ({0})
+            GROUP BY checkouts.id, builds.status, tests.environment_compatible, compiler_arch,
+                builds.config_name, lab, platform, is_boot)
+            UNION ALL
+            (SELECT
+                 COUNT(*) AS tests_count,
+                 checkouts.origin,
+                 tests.status AS status,
+                 count(incidents.id) AS known_issues,
+                 array[builds.compiler, builds.architecture] AS compiler_arch,
+                 builds.config_name,
+                 tests.misc->>'runtime' AS lab,
+                 tests.environment_misc->>'platform' AS platform,
+                 tests.environment_compatible,
+                 checkouts.origin,
+                 checkouts.tree_name,
+                 checkouts.git_repository_url,
+                 checkouts.git_commit_tags,
+                 checkouts.git_commit_name,
+                 checkouts.git_repository_branch,
+                 checkouts.git_commit_hash,
+                 false AS is_build,
+                 true AS is_test,
+                 (tests.path like 'boot.%%' or tests.path = 'boot') AS is_boot
+             FROM
+                builds
+            inner JOIN tests ON
+                tests.build_id = builds.id
+            INNER JOIN checkouts ON
+                builds.checkout_id = checkouts.id
+            LEFT OUTER JOIN incidents ON
+                tests.id = incidents.test_id
+            WHERE
+                (
+                    builds.config_name IS NOT NULL
+                    AND builds.id not like 'maestro:dummy_%%'
+                    AND (tests.environment_compatible @> ARRAY[%s]::TEXT[]
+                    OR tests.environment_misc ->> 'platform' = %s)
+                )
+                AND tests.origin = %s
+                AND tests.start_time >= %s
+                AND tests.start_time <= %s
+                AND checkouts.git_commit_hash IN ({0})
+            GROUP BY checkouts.id, tests.status, tests.environment_compatible, compiler_arch,
+                builds.config_name, lab, platform, is_boot);
+    """.format(
+        ",".join(repeat("%s", len(commit_hashes)))
+    )
+
+    params = [
+        hardware_id,
+        hardware_id,
+        origin,
+        start_datetime,
+        end_datetime,
+        *commit_hashes,
+    ]
+
+    # TODO: check if we can reuse parameters to avoid double passing
+    params = [*params, *params]
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        query_rows = dict_fetchall(cursor)
+        set_query_cache(key=cache_key, params=tests_cache_params, rows=query_rows)
+        return query_rows
+
+
 def query_records(
     *, hardware_id: str, origin: str, trees: list[Tree], start_date: int, end_date: int
 ) -> list[dict] | None:
     commit_hashes = [tree.head_git_commit_hash for tree in trees]
 
-    # TODO Treat commit_hash collision (it can happen between repos)
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
+    query = """
             SELECT
                 tests.id,
                 tests.origin AS test_origin,
@@ -411,19 +542,22 @@ def query_records(
             ORDER BY
                 issues."_timestamp" DESC
             """.format(
-                ",".join(["%s"] * len(commit_hashes))
-            ),
-            [
-                hardware_id,
-                hardware_id,
-                origin,
-                start_date,
-                end_date,
-            ]
-            + commit_hashes,
-        )
+        ",".join(["%s"] * len(commit_hashes))
+    )
 
-        return dict_fetchall(cursor)
+    params = [
+        hardware_id,
+        hardware_id,
+        origin,
+        start_date,
+        end_date,
+    ] + commit_hashes
+
+    # TODO Treat commit_hash collision (it can happen between repos)
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        query_rows = dict_fetchall(cursor)
+        return query_rows
 
 
 def get_hardware_summary_data(

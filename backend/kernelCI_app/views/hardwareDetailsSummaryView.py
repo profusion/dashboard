@@ -1,44 +1,30 @@
 from collections import defaultdict
-from datetime import datetime
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from drf_spectacular.utils import extend_schema
 from http import HTTPStatus
 import json
-from kernelCI_app.helpers.commonDetails import PossibleTabs
+from kernelCI_app.constants.general import UNKNOWN_STRING
 from kernelCI_app.helpers.errorHandling import create_api_error_response
 from kernelCI_app.helpers.hardwareDetails import (
-    assign_default_record_values,
-    decide_if_is_build_in_filter,
-    decide_if_is_full_record_filtered_out,
-    decide_if_is_test_in_filter,
     generate_build_summary_typed,
     generate_test_summary_typed,
-    generate_tree_status_summary_dict,
-    get_build_typed,
-    get_filter_options,
-    get_processed_issue_key,
     get_trees_with_selected_commit,
-    get_validated_current_tree,
-    handle_build_summary,
-    handle_test_summary,
-    handle_tree_status_summary,
-    is_issue_processed,
-    is_test_processed,
-    process_issue,
-    set_trees_status_summary,
-    format_issue_summary_for_response,
     unstable_parse_post_body,
 )
 from kernelCI_app.queries.hardware import (
-    get_hardware_details_data,
+    get_hardware_details_summary,
     get_hardware_trees_data,
 )
+from kernelCI_app.typeModels.common import StatusCount
 from kernelCI_app.typeModels.commonDetails import (
+    BuildArchitectures,
+    BuildSummary,
     GlobalFilters,
     LocalFilters,
     Summary,
     TestArchSummaryItem,
+    TestSummary,
 )
 from kernelCI_app.typeModels.commonOpenApiParameters import (
     HARDWARE_ID_PATH_PARAM,
@@ -49,14 +35,11 @@ from kernelCI_app.typeModels.hardwareDetails import (
     HardwareDetailsPostBody,
     HardwareDetailsSummaryResponse,
     HardwareTestLocalFilters,
-    PossibleTestType,
     Tree,
 )
-from kernelCI_app.utils import is_boot
 from pydantic import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from typing import Dict, List, Set
 from kernelCI_app.constants.localization import ClientStrings
 
 
@@ -67,189 +50,310 @@ from kernelCI_app.constants.localization import ClientStrings
 # supported in this project
 @method_decorator(csrf_exempt, name="dispatch")
 class HardwareDetailsSummary(APIView):
-    def __init__(self):
-        self.origin: str = None
-        self.start_datetime: datetime = None
-        self.end_datetime: datetime = None
-        self.selected_commits: Dict[str, str] = None
 
-        self.processed_builds = set()
-        self.processed_tests = set()
+    # TODO: change to a enum on the query?
+    def get_summary_type(self, instance: dict) -> str:
+        if instance["is_build"]:
+            return "builds"
+        if instance["is_boot"]:
+            return "boots"
+        if instance["is_test"]:
+            return "tests"
+        raise ValueError("Invalid summary type")
 
-        self.processed_issues: Dict[str, Set[str]] = {
-            "build": set(),
-            "boot": set(),
-            "test": set(),
+    def aggregate_summaries(
+        self, summary: list[dict], hardware_id: str
+    ) -> tuple[BuildSummary, TestSummary, TestSummary]:
+        builds_summary = generate_build_summary_typed()
+        tests_summary = generate_test_summary_typed()
+        boots_summary = generate_test_summary_typed()
+
+        tests_summary.platforms = {hardware_id: StatusCount()}
+        boots_summary.platforms = {hardware_id: StatusCount()}
+
+        # aggregation
+        for instance in summary:
+            status = instance["status"]
+            count = instance["count"]
+            known_issues = instance["known_issues"]
+            config = instance["config_name"] or UNKNOWN_STRING
+            origin = instance["origin"] or UNKNOWN_STRING
+            lab = instance["lab"] or UNKNOWN_STRING
+            (compiler, architecture) = [
+                val or UNKNOWN_STRING
+                for val in (instance["compiler_arch"] or [None, None])
+            ]
+
+            status_count = StatusCount()
+            status_count.increment(status, count)
+
+            if instance["is_build"]:
+                self.increment_build(
+                    builds_summary=builds_summary,
+                    status_count=status_count,
+                    architecture=architecture,
+                    config=config,
+                    lab=lab,
+                    origin=origin,
+                    known_issues=known_issues,
+                    compiler=compiler,
+                )
+
+            elif instance["is_boot"]:
+                self.increment_test(
+                    tests_summary=boots_summary,
+                    status_count=status_count,
+                    config=config,
+                    lab=lab,
+                    origin=origin,
+                    known_issues=known_issues,
+                    architecture=architecture,
+                    compiler=compiler,
+                    hardware_id=hardware_id,
+                )
+
+            elif instance["is_test"]:
+                self.increment_test(
+                    tests_summary=tests_summary,
+                    status_count=status_count,
+                    config=config,
+                    lab=lab,
+                    origin=origin,
+                    known_issues=known_issues,
+                    architecture=architecture,
+                    compiler=compiler,
+                    hardware_id=hardware_id,
+                )
+
+        # ensure uniqueness on architecure and compilers (maybe we could change data structures???)
+        for summary in builds_summary.architectures.values():
+            summary.compilers = sorted(set(summary.compilers or []))
+        tests_summary_archs = defaultdict(StatusCount)
+        for item in tests_summary.architectures:
+            tests_summary_archs[(item.arch, item.compiler)] += item.status
+        tests_summary.architectures = [
+            TestArchSummaryItem(arch=arch, compiler=compiler, status=status)
+            for (arch, compiler), status in tests_summary_archs.items()
+        ]
+
+        boots_summary_archs = defaultdict(StatusCount)
+        for item in boots_summary.architectures:
+            boots_summary_archs[(item.arch, item.compiler)] += item.status
+        boots_summary.architectures = [
+            TestArchSummaryItem(arch=arch, compiler=compiler, status=status)
+            for (arch, compiler), status in boots_summary_archs.items()
+        ]
+
+        return (builds_summary, boots_summary, tests_summary)
+
+    def increment_test(
+        self,
+        *,
+        tests_summary: TestSummary,
+        status_count: StatusCount,
+        config: str,
+        lab: str,
+        origin: str,
+        known_issues: int,
+        architecture: str,
+        compiler: str,
+        hardware_id: str,
+    ):
+        if config not in tests_summary.configs:
+            tests_summary.configs[config] = StatusCount()
+        if lab not in tests_summary.labs:
+            tests_summary.labs[lab] = StatusCount()
+        if origin not in tests_summary.origins:
+            tests_summary.origins[origin] = StatusCount()
+
+        tests_summary.status += status_count
+        tests_summary.configs[config] += status_count
+        tests_summary.labs[lab] += status_count
+        tests_summary.architectures.append(
+            TestArchSummaryItem(
+                arch=architecture, compiler=compiler, status=status_count
+            )
+        )
+        tests_summary.origins[origin] += status_count
+        tests_summary.platforms[hardware_id] += status_count
+        if status_count.FAIL > 0:
+            tests_summary.unknown_issues += status_count.FAIL - known_issues
+
+    def increment_build(
+        self,
+        *,
+        builds_summary: BuildSummary,
+        status_count: StatusCount,
+        architecture: str,
+        config: str,
+        lab: str,
+        origin: str,
+        known_issues: int,
+        compiler: str,
+    ):
+        if architecture not in builds_summary.architectures:
+            builds_summary.architectures[architecture] = BuildArchitectures(
+                compilers=[]
+            )
+        if config not in builds_summary.configs:
+            builds_summary.configs[config] = StatusCount()
+        if lab not in builds_summary.labs:
+            builds_summary.labs[lab] = StatusCount()
+        if origin not in builds_summary.origins:
+            builds_summary.origins[origin] = StatusCount()
+
+        builds_summary.status += status_count
+        builds_summary.configs[config] += status_count
+        builds_summary.labs[lab] += status_count
+        builds_summary.origins[origin] += status_count
+        builds_summary.architectures[architecture] += status_count
+        if compiler not in (builds_summary.architectures[architecture].compilers or []):
+            builds_summary.architectures[architecture].compilers.append(compiler)
+        if status_count.FAIL > 0:
+            builds_summary.unknown_issues += status_count.FAIL - known_issues
+
+    def aggregate_common(self, summary: list[dict]) -> tuple[list[Tree], list[str]]:
+
+        all_trees: dict[tuple, Tree] = dict()
+        all_compatibles: set[str] = set()
+
+        # aggregation
+        for instance in summary:
+            status = instance["status"]
+            count = instance["count"]
+            origin = instance["origin"] or UNKNOWN_STRING
+            compatibles = instance["environment_compatible"]
+            tree_name = instance["tree_name"]
+            git_repository_url = instance["git_repository_url"]
+            git_repository_branch = instance["git_repository_branch"]
+            git_commit_name = instance["git_commit_name"]
+            git_commit_hash = instance["git_commit_hash"]
+            git_commit_tags = instance["git_commit_tags"]
+
+            status_count = StatusCount()
+            status_count.increment(status, count)
+
+            if not (tree_name, git_repository_url, git_repository_branch) in all_trees:
+                all_trees[(tree_name, git_repository_url, git_repository_branch)] = (
+                    Tree(
+                        index="",  # if we dont mind to sort, we can just use len(all_trees)
+                        tree_name=tree_name,
+                        git_repository_branch=git_repository_branch,
+                        git_repository_url=git_repository_url,
+                        head_git_commit_hash=git_commit_hash,
+                        head_git_commit_name=git_commit_name,
+                        head_git_commit_tag=git_commit_tags,
+                        origin=origin,
+                        selected_commit_status={
+                            "builds": StatusCount(),
+                            "boots": StatusCount(),
+                            "tests": StatusCount(),
+                        },
+                        is_selected=None,
+                    )
+                )
+            row_type = self.get_summary_type(instance)
+            all_trees[
+                (tree_name, git_repository_url, git_repository_branch)
+            ].selected_commit_status[row_type] += status_count
+            all_compatibles.update(compatibles or [])
+
+        # not sure if it is worth sorting for index (but is also not slowing us down)
+        sorted_trees = sorted(
+            all_trees.values(),
+            key=lambda t: (
+                t.tree_name or "",
+                t.git_repository_branch or "",
+                t.head_git_commit_name or "",
+            ),
+        )
+        for i, tree in enumerate(sorted_trees):
+            tree.index = str(i)
+
+        return sorted_trees, sorted(all_compatibles)
+
+    def aggregate_filters(
+        self,
+        builds_summary: BuildSummary,
+        boots_summary: TestSummary,
+        tests_summary: TestSummary,
+        hardware_id: str,
+    ) -> tuple[
+        GlobalFilters, LocalFilters, HardwareTestLocalFilters, HardwareTestLocalFilters
+    ]:
+        builds_configs = {*builds_summary.configs}
+        boots_configs = {*boots_summary.configs}
+        tests_configs = {*tests_summary.configs}
+        all_config = {*builds_configs, *boots_configs, *tests_configs}
+
+        builds_architectures = {*builds_summary.architectures}
+        boots_architectures = {*[item.arch for item in boots_summary.architectures]}
+        tests_architecures = {*[item.arch for item in tests_summary.architectures]}
+        all_architectures = {
+            *builds_architectures,
+            *boots_architectures,
+            *tests_architecures,
         }
 
-        self.processed_compatibles: Set[str] = set()
-
-        self.issue_dicts = {
-            "build": {
-                "issues": {},
-                "failedWithUnknownIssues": 0,
-            },
-            "boot": {
-                "issues": {},
-                "failedWithUnknownIssues": 0,
-            },
-            "test": {
-                "issues": {},
-                "failedWithUnknownIssues": 0,
-            },
+        builds_compilers = {
+            *[
+                compiler
+                for arch in builds_summary.architectures.values()
+                for compiler in (arch.compilers or [])
+            ]
+        }
+        boots_compilers = {*[item.compiler for item in boots_summary.architectures]}
+        tests_compilers = {*[item.compiler for item in tests_summary.architectures]}
+        all_compilers = {
+            *builds_compilers,
+            *boots_compilers,
+            *tests_compilers,
         }
 
-        self.processed_architectures: Dict[str, Dict[str, TestArchSummaryItem]] = {
-            "build": {},
-            "boot": {},
-            "test": {},
+        builds_issues_version = {
+            (item.id, item.version) for item in builds_summary.issues
+        }
+        boots_issues_version = {
+            (item.id, item.version) for item in boots_summary.issues
+        }
+        tests_issues_version = {
+            (item.id, item.version) for item in tests_summary.issues
         }
 
-        self.unfiltered_build_issues = set()
-        self.unfiltered_boot_issues = set()
-        self.unfiltered_test_issues = set()
-        self.unfiltered_uncategorized_issue_flags: Dict[PossibleTabs, bool] = {
-            "build": False,
-            "boot": False,
-            "test": False,
-        }
+        builds_labs = {*builds_summary.labs}
+        boots_labs = {*boots_summary.labs}
+        tests_labs = {*tests_summary.labs}
 
-        self.unfiltered_boot_platforms = set()
-        self.unfiltered_test_platforms = set()
+        builds_origins = {*builds_summary.origins}
+        boots_origins = {*boots_summary.origins}
+        tests_origins = {*tests_summary.origins}
 
-        self.global_configs = set()
-        self.global_architectures = set()
-        self.global_compilers = set()
-
-        self.builds_summary = generate_build_summary_typed()
-        self.boots_summary = generate_test_summary_typed()
-        self.tests_summary = generate_test_summary_typed()
-
-        self.tree_status_summary = defaultdict(generate_tree_status_summary_dict)
-        self.compatibles: List[str] = []
-
-        self.unfiltered_origins: dict[PossibleTabs, set[str]] = {
-            "build": set(),
-            "boot": set(),
-            "test": set(),
-        }
-
-        self.unfiltered_labs: dict[PossibleTabs, set[str]] = {
-            "build": set(),
-            "boot": set(),
-            "test": set(),
-        }
-
-    def _process_test(self, record: Dict) -> None:
-        is_record_boot = is_boot(record["path"])
-        test_type_key: PossibleTestType = "boot" if is_record_boot else "test"
-        task_issue_summary = self.issue_dicts[test_type_key]
-
-        is_test_processed_result = is_test_processed(
-            record=record, processed_tests=self.processed_tests
-        )
-        is_issue_processed_result = is_issue_processed(
-            record=record, processed_issues=self.processed_issues[test_type_key]
-        )
-        should_process_test = decide_if_is_test_in_filter(
-            instance=self, test_type=test_type_key, record=record
-        )
-
-        if (
-            should_process_test
-            and not is_issue_processed_result
-            and is_test_processed_result
-        ):
-            process_issue(
-                record=record,
-                task_issues_dict=task_issue_summary,
-                issue_from="test",
-            )
-            processed_issue_key = get_processed_issue_key(record=record)
-            self.processed_issues[test_type_key].add(processed_issue_key)
-
-        if should_process_test and not is_test_processed_result:
-            task_summary = self.boots_summary if is_record_boot else self.tests_summary
-            handle_test_summary(
-                record=record,
-                task=task_summary,
-                issue_dict=task_issue_summary,
-                processed_archs=self.processed_architectures[test_type_key],
-            )
-            self.processed_tests.add(record["id"])
-
-    def _process_build(self, record: Dict, tree_index: int) -> None:
-        build = get_build_typed(record, tree_index)
-        build_id = record["build_id"]
-
-        should_process_build = decide_if_is_build_in_filter(
-            instance=self,
-            build=build,
-            processed_builds=self.processed_builds,
-            incident_test_id=record["incidents__test_id"],
-        )
-
-        if should_process_build:
-            handle_build_summary(
-                record=record,
-                builds_summary=self.builds_summary,
-                issue_dict=self.issue_dicts["build"],
-                tree_index=tree_index,
-            )
-            self.processed_builds.add(build_id)
-
-    def _sanitize_records(
-        self, records, trees: List[Tree], is_all_selected: bool
-    ) -> None:
-        for record in records:
-            current_tree = get_validated_current_tree(
-                record=record, selected_trees=trees
-            )
-            if current_tree is None:
-                continue
-
-            assign_default_record_values(record)
-
-            if record["environment_compatible"] is not None:
-                self.processed_compatibles.update(record["environment_compatible"])
-
-            tree_index = current_tree.index
-
-            handle_tree_status_summary(
-                record=record,
-                tree_status_summary=self.tree_status_summary,
-                tree_index=tree_index,
-                processed_builds=self.processed_builds,
-            )
-
-            is_record_filtered_out = decide_if_is_full_record_filtered_out(
-                instance=self,
-                record=record,
-                current_tree=current_tree,
-                is_all_selected=is_all_selected,
-            )
-            if is_record_filtered_out:
-                continue
-
-            self._process_test(record=record)
-
-            self._process_build(record, tree_index)
-
-    def _format_processing_for_response(self, hardware_id: str) -> None:
-        self.compatibles = list(self.processed_compatibles - {hardware_id})
-
-        self.boots_summary.architectures = list(
-            self.processed_architectures["boot"].values()
-        )
-        self.tests_summary.architectures = list(
-            self.processed_architectures["test"].values()
-        )
-
-        format_issue_summary_for_response(
-            builds_summary=self.builds_summary,
-            boots_summary=self.boots_summary,
-            tests_summary=self.tests_summary,
-            issue_dicts=self.issue_dicts,
+        return (
+            GlobalFilters(
+                configs=[*all_config],
+                architectures=[*all_architectures],
+                compilers=[*all_compilers],
+            ),
+            LocalFilters(
+                issues=[*builds_issues_version],
+                origins=[*builds_origins],
+                has_unknown_issue=True,
+                labs=[*builds_labs],
+            ),
+            HardwareTestLocalFilters(
+                issues=[*boots_issues_version],
+                origins=[*boots_origins],
+                has_unknown_issue=True,
+                platforms=[hardware_id],
+                labs=[*boots_labs],
+            ),
+            HardwareTestLocalFilters(
+                issues=[*tests_issues_version],
+                origins=[*tests_origins],
+                has_unknown_issue=True,
+                platforms=[hardware_id],
+                labs=[*tests_labs],
+            ),
         )
 
     # Using post to receive a body request
@@ -295,7 +399,7 @@ class HardwareDetailsSummary(APIView):
             trees=trees, selected_commits=self.selected_commits
         )
 
-        records = get_hardware_details_data(
+        summary = get_hardware_details_summary(
             hardware_id=hardware_id,
             origin=self.origin,
             trees_with_selected_commits=trees_with_selected_commits,
@@ -303,77 +407,35 @@ class HardwareDetailsSummary(APIView):
             end_datetime=self.end_datetime,
         )
 
-        if len(records) == 0:
+        if not summary:
             return create_api_error_response(
                 error_message=ClientStrings.HARDWARE_NOT_FOUND,
                 status_code=HTTPStatus.OK,
             )
 
-        is_all_selected = len(self.selected_commits) == 0
-
-        try:
-            self._sanitize_records(
-                records, trees_with_selected_commits, is_all_selected
+        builds_summary, boots_summary, tests_summary = self.aggregate_summaries(
+            summary, hardware_id
+        )
+        all_trees, all_compatibles = self.aggregate_common(summary)
+        all_filters, builds_filters, boots_filters, tests_filters = (
+            self.aggregate_filters(
+                builds_summary, boots_summary, tests_summary, hardware_id
             )
+        )
 
-            self._format_processing_for_response(hardware_id=hardware_id)
+        summary = Summary(
+            builds=builds_summary, boots=boots_summary, tests=tests_summary
+        )
+        commons = HardwareCommon(trees=all_trees, compatibles=all_compatibles)
+        filters = HardwareDetailsFilters(
+            all=all_filters,
+            builds=builds_filters,
+            boots=boots_filters,
+            tests=tests_filters,
+        )
 
-            get_filter_options(
-                instance=self,
-                records=records,
-                selected_trees=trees_with_selected_commits,
-                is_all_selected=is_all_selected,
-            )
-
-            set_trees_status_summary(
-                trees=trees, tree_status_summary=self.tree_status_summary
-            )
-
-            valid_response = HardwareDetailsSummaryResponse(
-                summary=Summary(
-                    builds=self.builds_summary,
-                    boots=self.boots_summary,
-                    tests=self.tests_summary,
-                ),
-                filters=HardwareDetailsFilters(
-                    all=GlobalFilters(
-                        configs=self.global_configs,
-                        architectures=self.global_architectures,
-                        compilers=self.global_compilers,
-                    ),
-                    builds=LocalFilters(
-                        issues=list(self.unfiltered_build_issues),
-                        has_unknown_issue=self.unfiltered_uncategorized_issue_flags[
-                            "build"
-                        ],
-                        origins=sorted(self.unfiltered_origins["build"]),
-                        labs=sorted(self.unfiltered_labs["build"]),
-                    ),
-                    boots=HardwareTestLocalFilters(
-                        issues=list(self.unfiltered_boot_issues),
-                        platforms=list(self.unfiltered_boot_platforms),
-                        has_unknown_issue=self.unfiltered_uncategorized_issue_flags[
-                            "boot"
-                        ],
-                        origins=sorted(self.unfiltered_origins["boot"]),
-                        labs=sorted(self.unfiltered_labs["boot"]),
-                    ),
-                    tests=HardwareTestLocalFilters(
-                        issues=list(self.unfiltered_test_issues),
-                        platforms=list(self.unfiltered_test_platforms),
-                        has_unknown_issue=self.unfiltered_uncategorized_issue_flags[
-                            "test"
-                        ],
-                        origins=sorted(self.unfiltered_origins["test"]),
-                        labs=sorted(self.unfiltered_labs["test"]),
-                    ),
-                ),
-                common=HardwareCommon(
-                    trees=trees,
-                    compatibles=self.compatibles,
-                ),
-            )
-        except ValidationError as e:
-            return Response(data=e.json(), status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        valid_response = HardwareDetailsSummaryResponse(
+            summary=summary, filters=filters, common=commons
+        )
 
         return Response(valid_response.model_dump())

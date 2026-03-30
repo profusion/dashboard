@@ -14,12 +14,12 @@ class StatusCount(BaseModel):
     DONE: Optional[int] = 0
     NULL: Optional[int] = 0
 
-    def increment(self, status: Optional[str]) -> None:
+    def increment(self, status: Optional[str], value=1) -> None:
         if status is None:
             status = "NULL"
 
         try:
-            setattr(self, status.upper(), getattr(self, status.upper()) + 1)
+            setattr(self, status.upper(), getattr(self, status.upper()) + value)
         except AttributeError:
             log_message(f"Unknown status: {status}")
 
