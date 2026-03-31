@@ -364,6 +364,16 @@ paths:
       operationId: issue_retrieve
       parameters:
       - in: query
+        name: endTimestampInSeconds
+        schema:
+          anyOf:
+          - type: string
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Endtimestampinseconds
+        description: Interval end timestamp in seconds for the results
+      - in: query
         name: filter
         schema:
           additionalProperties:
@@ -380,6 +390,16 @@ paths:
           title: Interval In Days
           type: integer
         description: Interval in days for the listing
+      - in: query
+        name: startTimestampInSeconds
+        schema:
+          anyOf:
+          - type: string
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Starttimestampinseconds
+        description: Interval start timestamp in seconds for the results
       - in: query
         name: starting_date_iso_format
         schema:
