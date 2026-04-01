@@ -12,16 +12,16 @@ from kernelCI_app.tests.utils.fields.builds import build_details_expected_fields
 from kernelCI_app.utils import string_to_json
 import pytest
 from http import HTTPStatus
+from datetime import datetime, timezone, timedelta
 
 
 client = IssueClient()
 
 DEFAULT_LISTING_STARTING_DATE = "2025-08-15"
-DEFAULT_LISTING_INTERVAL_IN_DAYS = 3
 
-# Unix timestamps for a 3-day window ending 2025-08-15 00:00:00 UTC
-_TS_END = "1755302400"  # 2025-08-15 00:00:00 UTC
-_TS_START = "1755043200"  # 2025-08-12 00:00:00 UTC
+# Unix timestamps for a dynamic window around the current time
+_TS_END = str(int((datetime.now(timezone.utc) + timedelta(days=1)).timestamp()))
+_TS_START = str(int((datetime.now(timezone.utc) - timedelta(days=3)).timestamp()))
 
 CULPRIT_CODE = {
     "filters": {"issue.culprit": "code"},
@@ -49,46 +49,40 @@ CULPRIT_CODE_AND_TOOL = {
 def pytest_generate_tests(metafunc):
     issues_listing_base_cases = [
         (
-            DEFAULT_LISTING_INTERVAL_IN_DAYS,
             DEFAULT_LISTING_STARTING_DATE,
             CULPRIT_CODE,
             HTTPStatus.OK,
             False,
         ),
         (
-            DEFAULT_LISTING_INTERVAL_IN_DAYS,
             DEFAULT_LISTING_STARTING_DATE,
             CULPRIT_TOOL,
             HTTPStatus.OK,
             False,
         ),
         (
-            DEFAULT_LISTING_INTERVAL_IN_DAYS,
             DEFAULT_LISTING_STARTING_DATE,
             CULPRIT_HARNESS,
             HTTPStatus.OK,
             False,
         ),
         (
-            -5,
             None,
             None,
-            HTTPStatus.BAD_REQUEST,
-            True,
+            HTTPStatus.OK,
+            False,
         ),
     ]
 
     if metafunc.config.getoption("--run-all"):
         issues_listing_base_cases += [
             (
-                DEFAULT_LISTING_INTERVAL_IN_DAYS,
                 DEFAULT_LISTING_STARTING_DATE,
                 CULPRIT_CODE_AND_TOOL,
                 HTTPStatus.OK,
                 False,
             ),
             (
-                DEFAULT_LISTING_INTERVAL_IN_DAYS,
                 DEFAULT_LISTING_STARTING_DATE,
                 None,
                 HTTPStatus.OK,
@@ -102,16 +96,15 @@ def pytest_generate_tests(metafunc):
 
 def test_list(pytestconfig, issue_listing_input):
     (
-        interval_in_day,
         starting_date_iso_format,
         culprit_data,
         status_code,
         has_error_body,
     ) = issue_listing_input
     filters = culprit_data.get("filters") if culprit_data else None
-    response = client.get_issues_list(
-        interval_in_days=interval_in_day,
-        starting_date_iso_format=starting_date_iso_format,
+    response = client.get_issues_list_by_timestamp(
+        start_timestamp=starting_date_iso_format,
+        end_timestamp=None,
         filters=filters,
     )
     content = string_to_json(response.content.decode())
