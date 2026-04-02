@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 
 import { useSearch } from '@tanstack/react-router';
 
+import { roundToNearestMinutes } from 'date-fns';
+
 import type { IssueListingResponse } from '@/types/issueListing';
 
 import { mapFiltersKeysToBackendCompatible } from '@/utils/utils';
@@ -16,7 +18,9 @@ import { REDUCED_TIME_SEARCH } from '@/utils/constants/general';
 import { RequestData } from './commonRequest';
 
 const getDefaultEndTimestamp = (): number =>
-  dateObjectToTimestampInSeconds(new Date());
+  dateObjectToTimestampInSeconds(
+    roundToNearestMinutes(new Date(), { nearestTo: 30 }),
+  );
 
 export const fetchIssueListing = async ({
   startTimestampInSeconds,
