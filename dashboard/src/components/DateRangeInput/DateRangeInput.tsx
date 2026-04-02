@@ -31,7 +31,7 @@ const timestampToDateString = (ts: number): string =>
 const dateStringToTimestamp = (dateStr: string): number =>
   Math.floor(new Date(dateStr).getTime() / MILLISECONDS_IN_SECOND);
 
-type ErrorField = 'start' | 'end' | null;
+type ErrorField = 'start' | 'end' | 'endFuture' | null;
 
 const DateRangeInput = (): JSX.Element => {
   const { formatMessage } = useIntl();
@@ -40,8 +40,11 @@ const DateRangeInput = (): JSX.Element => {
     from: '/_main/issues',
   });
 
+  const todayTs = getDefaultEndTimestamp();
   const startTs = startTimestampInSeconds ?? getDefaultStartTimestamp();
-  const endTs = endTimestampInSeconds ?? getDefaultEndTimestamp();
+  const endTs = endTimestampInSeconds ?? todayTs;
+
+  const todayDateStr = timestampToDateString(todayTs);
 
   const startDateStr = timestampToDateString(startTs);
   const endDateStr = timestampToDateString(endTs);
@@ -92,6 +95,10 @@ const DateRangeInput = (): JSX.Element => {
         return;
       }
       const newEndTs = dateStringToTimestamp(e.target.value);
+      if (newEndTs > todayTs) {
+        triggerError('endFuture');
+        return;
+      }
       if (newEndTs < startTs) {
         triggerError('end');
         return;
@@ -101,15 +108,19 @@ const DateRangeInput = (): JSX.Element => {
         search: prev => ({ ...prev, endTimestampInSeconds: newEndTs }),
       });
     },
-    [navigate, startTs, triggerError],
+    [navigate, startTs, todayTs, triggerError],
   );
 
-  const errorMessage =
-    errorField === 'start'
-      ? formatMessage({ id: 'dateRange.startAfterEnd' })
-      : errorField === 'end'
-        ? formatMessage({ id: 'dateRange.endBeforeStart' })
-        : null;
+  const errorMessageIds = {
+    start: 'dateRange.startAfterEnd',
+    end: 'dateRange.endBeforeStart',
+    endFuture: 'dateRange.endAfterToday',
+  } as const satisfies Record<NonNullable<ErrorField>, string>;
+
+  const errorMessageId = errorField ? errorMessageIds[errorField] : null;
+  const errorMessage = errorMessageId
+    ? formatMessage({ id: errorMessageId })
+    : null;
 
   return (
     <div className="flex flex-col items-end gap-1">
@@ -127,6 +138,7 @@ const DateRangeInput = (): JSX.Element => {
           type="date"
           value={endDateStr}
           min={startDateStr}
+          max={todayDateStr}
           onChange={handleEndChange}
           className={`w-[140px] cursor-pointer${errorField === 'end' ? 'border-red' : ''}`}
           data-test-id="date-range-end"
