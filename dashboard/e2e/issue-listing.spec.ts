@@ -7,8 +7,9 @@ const DEFAULT_ACTION_TIMEOUT = 1000;
 const SECONDS_IN_DAY = 86400;
 const MILLISECONDS_IN_SECOND = 1000;
 const THREE_DAYS = 3;
-const TEN_DAYS = 10;
+const ISO_DATE_LENGTH = 10;
 const TWO_DAYS = 2;
+const ONE_DAY = 1;
 
 const daysToMilliseconds = (days: number): number =>
   days * SECONDS_IN_DAY * MILLISECONDS_IN_SECOND;
@@ -63,7 +64,7 @@ test.describe('Issue Listing Page Tests', () => {
       new Date(endValue).getTime() - daysToMilliseconds(THREE_DAYS),
     )
       .toISOString()
-      .slice(0, TEN_DAYS);
+      .slice(0, ISO_DATE_LENGTH);
 
     await startInput.fill(newStart);
     await page.waitForTimeout(DEFAULT_ACTION_TIMEOUT);
@@ -75,15 +76,10 @@ test.describe('Issue Listing Page Tests', () => {
     const endInput = page.locator(ISSUE_LISTING_SELECTORS.endDateInput);
     await expect(endInput).toBeVisible();
 
-    const startValue = await page
-      .locator(ISSUE_LISTING_SELECTORS.startDateInput)
-      .inputValue();
-
-    const newEnd = new Date(
-      new Date(startValue).getTime() + daysToMilliseconds(TEN_DAYS),
-    )
+    // Set a past end date (yesterday) — always valid and before today
+    const newEnd = new Date(Date.now() - daysToMilliseconds(ONE_DAY))
       .toISOString()
-      .slice(0, TEN_DAYS);
+      .slice(0, ISO_DATE_LENGTH);
 
     await endInput.fill(newEnd);
     await page.waitForTimeout(DEFAULT_ACTION_TIMEOUT);
@@ -102,7 +98,7 @@ test.describe('Issue Listing Page Tests', () => {
       new Date(startValue).getTime() - daysToMilliseconds(TWO_DAYS),
     )
       .toISOString()
-      .slice(0, TEN_DAYS);
+      .slice(0, ISO_DATE_LENGTH);
 
     const urlBefore = page.url();
     await endInput.fill(invalidEnd);
@@ -124,12 +120,12 @@ test.describe('Issue Listing Page Tests', () => {
     ).toBeVisible();
 
     await page
-      .locator(ISSUE_LISTING_SELECTORS.itemsPerPageOption('25'))
+      .locator(ISSUE_LISTING_SELECTORS.itemsPerPageOption('20'))
       .click();
 
     await page.waitForTimeout(DEFAULT_ACTION_TIMEOUT);
 
-    await expect(tableSizeSelector).toContainText('25');
+    await expect(tableSizeSelector).toContainText('20');
   });
 
   test('pagination navigation', async ({ page }) => {
