@@ -40,7 +40,7 @@ const DrawerHeader = (): JSX.Element => {
   return (
     <header className="mb-7 w-full">
       <DrawerTitle>
-        <div className="mx-auto mb-4 flex w-[1400px] items-center justify-between">
+        <div className="mx-auto mb-4 flex w-full items-center justify-between">
           <span className="text-2xl/[42px] font-bold">
             <FormattedMessage id="filter.filtering" />
           </span>
@@ -58,12 +58,12 @@ const DrawerHeader = (): JSX.Element => {
 const DrawerLink = ({ title, value, url }: IDrawerLink): JSX.Element => {
   return (
     <div className="mb-8 flex items-center justify-between">
-      <div className="border-dark-gray flex h-[52px] w-full flex-col border bg-white px-4 py-2">
+      <div className="border-dark-gray flex min-h-[52px] w-full max-w-full flex-col border bg-white px-4 py-2">
         <span className="text-dark-gray2 text-xs">
           <FormattedMessage id={title} />
         </span>
         <a
-          className="text-dim-black text-base underline"
+          className="text-dim-black break-all text-base underline"
           href={url ?? '#'}
           target={url ? '_blank' : undefined}
           rel="noreferrer"
@@ -164,11 +164,11 @@ const Drawer = ({
         />
       </DrawerTrigger>
 
-      <DrawerContent className="bg-light-gray flex h-screen items-center px-4">
+      <DrawerContent className="bg-light-gray flex h-full flex-col px-4">
         <DrawerHeader />
-        <section className="h-full overflow-y-auto">
+        <section className="w-full flex-1 overflow-y-auto">
           {drawerLinkComponent}
-          <div className="w-[1000px] rounded-lg bg-white px-6 py-5">
+          <div className="w-fit rounded-lg bg-white px-6 py-5">
             {showLegend && <Legend />}
             <div>{children}</div>
           </div>

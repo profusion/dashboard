@@ -111,7 +111,7 @@ const CheckboxList = ({ items, onClickItem }: ICheckboxList): JSX.Element => {
   );
 
   return (
-    <div className="flex max-w-[1000px] flex-wrap gap-x-4 gap-y-6">
+    <div className="flex flex-wrap gap-x-4 gap-y-6">
       {itemComponents}
     </div>
   );
