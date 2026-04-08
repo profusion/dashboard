@@ -93,7 +93,8 @@ def standardize_tree_names(
 
 def standardize_labs(input_data: dict[str, Any]) -> None:
     """
-    Standardize labs in data, moving automatic lab names to AUTOMATIC_LAB_FIELD
+    Standardize labs in data, moving automatic lab names to AUTOMATIC_LAB_FIELD.
+    Falls back to 'origin' when 'lab' (builds) or 'runtime' (tests) is missing.
     """
 
     builds: list[dict[str, Any]] = input_data.get("builds", [])
@@ -102,6 +103,10 @@ def standardize_labs(input_data: dict[str, Any]) -> None:
         if lab and AUTOMATIC_LABS.match(lab):
             build["misc"][AUTOMATIC_LAB_FIELD] = lab
             build["misc"].pop("lab", None)
+        elif not lab:
+            origin = build.get("origin")
+            if origin:
+                build.setdefault("misc", {})["lab"] = origin
 
     tests: list[dict[str, Any]] = input_data.get("tests", [])
     for test in tests:
@@ -109,6 +114,10 @@ def standardize_labs(input_data: dict[str, Any]) -> None:
         if lab and AUTOMATIC_LABS.match(lab):
             test["misc"][AUTOMATIC_LAB_FIELD] = lab
             test["misc"].pop("runtime", None)
+        elif not lab:
+            origin = test.get("origin")
+            if origin:
+                test.setdefault("misc", {})["runtime"] = origin
 
 
 def _extract_origins_info(data: Optional[dict[str, Any]]) -> str:

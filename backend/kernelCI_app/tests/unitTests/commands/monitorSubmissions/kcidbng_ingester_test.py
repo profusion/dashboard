@@ -204,13 +204,16 @@ class TestStandardizeLabs:
     """Test cases for standardize_labs function."""
 
     # Test cases:
-    # - builds/tests with missing misc field
-    # - builds/tests with misc but not lab field
+    # - builds/tests with missing misc field, no origin
+    # - builds/tests with missing misc field, with origin (fallback)
+    # - builds/tests with misc but not lab field, no origin
+    # - builds/tests with misc but not lab field, with origin (fallback)
     # - empty builds/tests data
     # - builds/tests with real/automatic labs/runtimes
+    # - builds/tests with automatic lab and origin (origin NOT used as fallback)
 
-    def test_standardize_labs_missing_misc(self):
-        """Test with builds/tests missing misc field."""
+    def test_standardize_labs_missing_misc_no_origin(self):
+        """Test with builds/tests missing misc field and no origin: misc not created."""
         input_data = {
             "builds": [
                 {"id": "build1"},
@@ -225,8 +228,25 @@ class TestStandardizeLabs:
         assert "misc" not in input_data["builds"][0]
         assert "misc" not in input_data["tests"][0]
 
-    def test_standardize_labs_missing_lab_runtime(self):
-        """Test with builds/tests having misc but missing lab/runtime field."""
+    def test_standardize_labs_missing_misc_with_origin_fallback(self):
+        """Test with builds/tests missing misc but with origin: misc created with origin as lab."""
+        origin = "broonie"
+        input_data = {
+            "builds": [
+                {"id": "build1", "origin": origin},
+            ],
+            "tests": [
+                {"id": "test1", "origin": origin},
+            ],
+        }
+
+        standardize_labs(input_data)
+
+        assert input_data["builds"][0]["misc"]["lab"] == origin
+        assert input_data["tests"][0]["misc"]["runtime"] == origin
+
+    def test_standardize_labs_missing_lab_runtime_no_origin(self):
+        """Test with builds/tests having misc but missing lab/runtime and no origin: unchanged."""
         input_data = {
             "builds": [
                 {
@@ -251,6 +271,25 @@ class TestStandardizeLabs:
         assert "runtime" not in input_data["tests"][0]["misc"]
         assert AUTOMATIC_LAB_FIELD not in input_data["tests"][0]["misc"]
 
+    def test_standardize_labs_missing_lab_runtime_with_origin_fallback(self):
+        """Test with builds/tests having misc but missing lab/runtime with origin: origin used."""
+        origin = "redhat"
+        input_data = {
+            "builds": [
+                {"misc": {"other_field": "value"}, "origin": origin},
+            ],
+            "tests": [
+                {"misc": {"platform": "x86"}, "origin": origin},
+            ],
+        }
+
+        standardize_labs(input_data)
+
+        assert input_data["builds"][0]["misc"]["lab"] == origin
+        assert AUTOMATIC_LAB_FIELD not in input_data["builds"][0]["misc"]
+        assert input_data["tests"][0]["misc"]["runtime"] == origin
+        assert AUTOMATIC_LAB_FIELD not in input_data["tests"][0]["misc"]
+
     def test_standardize_labs_empty_data(self):
         """Test with empty builds and tests."""
         input_data = {
@@ -262,6 +301,26 @@ class TestStandardizeLabs:
 
         assert input_data["builds"] == []
         assert input_data["tests"] == []
+
+    def test_standardize_labs_automatic_lab_with_origin_does_not_fallback(self):
+        """Test that when an automatic lab is present, origin is NOT used as fallback."""
+        origin = "maestro"
+        input_data = {
+            "builds": [
+                {"misc": {"lab": "shell"}, "origin": origin},
+            ],
+            "tests": [
+                {"misc": {"runtime": "k8s"}, "origin": origin},
+            ],
+        }
+
+        standardize_labs(input_data)
+
+        # Automatic lab moved, but origin is NOT placed in lab
+        assert "lab" not in input_data["builds"][0]["misc"]
+        assert input_data["builds"][0]["misc"][AUTOMATIC_LAB_FIELD] == "shell"
+        assert "runtime" not in input_data["tests"][0]["misc"]
+        assert input_data["tests"][0]["misc"][AUTOMATIC_LAB_FIELD] == "k8s"
 
     def test_standardize_labs_mixed_builds_and_tests(self):
         """Test with a mix of automatic and real labs/runtimes."""
