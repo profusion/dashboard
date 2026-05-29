@@ -106,21 +106,27 @@ def make_issue_instance(issue: dict[str, Any]) -> Issues:
     return obj
 
 
-def make_checkout_instance(checkout: dict[str, Any]) -> Checkouts:
+def make_checkout_instance(
+    checkout: dict[str, Any], commit_enrichment: dict[str, Any] | None = None
+) -> Checkouts:
+    enriched_checkout = checkout | (commit_enrichment or {})
     filtered_checkout = {
-        key: value for key, value in checkout.items() if key in CHECKOUT_FIELDS
+        key: value for key, value in enriched_checkout.items() if key in CHECKOUT_FIELDS
     }
     obj = Checkouts(**filtered_checkout)
     obj.field_timestamp = timezone.now()
     return obj
 
 
-def make_commit_instance_from_checkout(checkout: dict[str, Any]) -> Commits | None:
+def make_commit_instance_from_checkout(
+    checkout: dict[str, Any], commit_enrichment: dict[str, Any] | None = None
+) -> Commits | None:
     if not checkout.get("git_commit_hash"):
         return None
 
+    enriched_checkout = checkout | (commit_enrichment or {})
     filtered_commit = {
-        key: value for key, value in checkout.items() if key in COMMIT_FIELDS
+        key: value for key, value in enriched_checkout.items() if key in COMMIT_FIELDS
     }
     obj = Commits(**filtered_commit)
     obj.field_timestamp = timezone.now()
@@ -154,7 +160,9 @@ def make_incident_instance(incident: dict[str, Any]) -> Incidents:
 
 
 def build_instances_from_submission(
-    data: dict[str, Any], counters: dict[TableNames, Counter]
+    data: dict[str, Any],
+    counters: dict[TableNames, Counter],
+    commit_enrichments: dict[str, dict[str, Any]] | None = None,
 ) -> ProcessedSubmission:
     """
     Convert raw submission dicts into unsaved Django model instances, grouped by type.
@@ -172,6 +180,8 @@ def build_instances_from_submission(
         "tests": [],
         "incidents": [],
     }
+    if commit_enrichments is None:
+        commit_enrichments = {}
 
     def _process(items, item_type: TableNames):
         if not items:
@@ -191,11 +201,14 @@ def build_instances_from_submission(
                             ingester=INGESTER_GRAFANA_LABEL, origin=issue.origin
                         ).inc()
                     case "checkouts":
-                        commit = make_commit_instance_from_checkout(item)
+                        checkout_enrichment = commit_enrichments.get(item.get("id"), {})
+                        commit = make_commit_instance_from_checkout(
+                            item, checkout_enrichment
+                        )
                         if commit is not None:
                             out["commits"].append(commit)
 
-                        checkout = make_checkout_instance(item)
+                        checkout = make_checkout_instance(item, checkout_enrichment)
                         out["checkouts"].append(checkout)
                         counters["checkouts"].labels(
                             ingester=INGESTER_GRAFANA_LABEL, origin=checkout.origin

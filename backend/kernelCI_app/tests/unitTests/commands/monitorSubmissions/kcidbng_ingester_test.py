@@ -447,6 +447,9 @@ class TestPrepareFileData:
     @patch("kcidb_io.schema.V5_3.upgrade")
     @patch("kernelCI_app.management.commands.helpers.kcidbng_ingester.standardize_labs")
     @patch(
+        "kernelCI_app.management.commands.helpers.kcidbng_ingester.enrich_commit_checkouts"
+    )
+    @patch(
         "kernelCI_app.management.commands.helpers.kcidbng_ingester.standardize_tree_names"
     )
     @patch(
@@ -460,6 +463,7 @@ class TestPrepareFileData:
         mock_file_open,
         mock_extract_log,
         mock_standardize_tree,
+        mock_enrich_commits,
         mock_standardize_labs,
         mock_upgrade,
         mock_validate,
@@ -485,6 +489,8 @@ class TestPrepareFileData:
         mock_validate.assert_called_once()
         mock_upgrade.assert_called_once()
         mock_standardize_labs.assert_called_once_with(expected_data)
+        mock_enrich_commits.assert_called_once_with([])
+        assert result_metadata["commit_enrichments"] == mock_enrich_commits.return_value
         mock_file_open.assert_called_once_with(SUBMISSION_PATH_MOCK, "r")
 
     @patch("kernelCI_app.management.commands.helpers.kcidbng_ingester.logger")

@@ -29,6 +29,10 @@ from kernelCI_app.management.commands.generated.insert_queries import INSERT_QUE
 from kernelCI_app.management.commands.helpers.aggregation_helpers import (
     aggregate_checkouts_and_pendings,
 )
+from kernelCI_app.management.commands.helpers.commit_enrichment import (
+    CommitEnrichment,
+    enrich_commit_checkouts,
+)
 from kernelCI_app.management.commands.helpers.file_utils import move_file_to_failed_dir
 from kernelCI_app.management.commands.helpers.log_excerpt_utils import (
     extract_log_excerpt,
@@ -173,11 +177,13 @@ def prepare_file_data(
         kcidb_io.schema.V5_3.validate(data)
         kcidb_io.schema.V5_3.upgrade(data)
         standardize_labs(data)
+        commit_enrichments = enrich_commit_checkouts(data.get("checkouts", []))
 
         processing_time = time.time() - start_time
         return data, {
             "fsize": fsize,
             "processing_time": processing_time,
+            "commit_enrichments": commit_enrichments,
         }
     except Exception as e:
         origin_info = _extract_origins_info(data)
@@ -428,7 +434,15 @@ def process_batch(
                 processed.value += 1
             FILES_INGESTER_COUNTER.labels(ingester=INGESTER_GRAFANA_LABEL).inc()
 
-            instances = build_instances_from_submission(data, MAP_TABLENAMES_TO_COUNTER)
+            commit_enrichments: dict[str, CommitEnrichment] = {}
+            if metadata:
+                commit_enrichments = metadata.get("commit_enrichments", {})
+
+            instances = build_instances_from_submission(
+                data,
+                MAP_TABLENAMES_TO_COUNTER,
+                commit_enrichments=commit_enrichments,
+            )
 
             instances_dict["commits"].extend(instances["commits"])
             instances_dict["issues"].extend(instances["issues"])
