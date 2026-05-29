@@ -1,7 +1,8 @@
 from typing import Literal, Optional
 
+from django.conf import settings
 from django.db import connection
-from django.db.models import Q
+from django.db.models import F, Q
 
 from kernelCI_app.cache import get_query_cache, set_query_cache
 from kernelCI_app.helpers.database import dict_fetchall
@@ -12,6 +13,10 @@ from kernelCI_app.queries.duration import (
     get_build_duration_clause,
 )
 from kernelCI_app.utils import get_query_time_interval
+
+
+def _use_commits_read_path() -> bool:
+    return settings.DB_SCHEMA_REFACTOR_READ_PATH in {"commits", "runs"}
 
 
 def _get_tree_listing_count_clause() -> str:
@@ -1356,6 +1361,13 @@ def get_latest_tree(
     git_commit_hash: Optional[str] = None,
 ) -> Optional[dict]:
     """Retrieves the most recent occurrence of the checkout of a tree with the given params."""
+    if _use_commits_read_path():
+        return _get_latest_tree_from_commits(
+            tree_name=tree_name,
+            git_branch=git_branch,
+            origin=origin,
+            git_commit_hash=git_commit_hash,
+        )
 
     tree_fields = [
         "git_commit_hash",
@@ -1383,3 +1395,39 @@ def get_latest_tree(
     query = query.order_by("-start_time").first()
 
     return query
+
+
+def _get_latest_tree_from_commits(
+    *,
+    tree_name: str,
+    git_branch: str,
+    origin: str,
+    git_commit_hash: Optional[str] = None,
+) -> Optional[dict]:
+    query = Checkouts.objects.filter(
+        origin=origin,
+        commit__isnull=False,
+        commit__git_repository_branch=git_branch,
+        commit__tree_name=tree_name,
+    )
+
+    if git_commit_hash is not None:
+        query = query.filter(
+            Q(commit__git_commit_hash=git_commit_hash)
+            | Q(commit__git_commit_tags__contains=[git_commit_hash])
+        )
+    else:
+        query = query.filter(commit__git_commit_hash__isnull=False)
+
+    return (
+        query.values(
+            "origin",
+            git_commit_hash=F("commit__git_commit_hash"),
+            git_commit_name=F("commit__git_commit_name"),
+            git_repository_url=F("commit__git_repository_url"),
+            git_repository_branch=F("commit__git_repository_branch"),
+            tree_name=F("commit__tree_name"),
+        )
+        .order_by("-start_time")
+        .first()
+    )

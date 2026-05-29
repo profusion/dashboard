@@ -54,6 +54,8 @@ DEBUG_SQL_QUERY = is_boolean_or_string_true(os.environ.get("DEBUG_SQL_QUERY", Fa
 # SECURITY WARNING: DO NOT PRINT PRODUCTION DB VARS
 DEBUG_DB_VARS = is_boolean_or_string_true(os.environ.get("DEBUG_DB_VARS", False))
 
+DB_SCHEMA_REFACTOR_READ_PATH = os.environ.get("DB_SCHEMA_REFACTOR_READ_PATH", "legacy")
+
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_SSL_REDIRECT = False

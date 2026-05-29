@@ -1,5 +1,7 @@
 from unittest.mock import Mock, patch
 
+from django.test import override_settings
+
 from kernelCI_app.queries.tree import (
     get_latest_tree,
     get_tree_details_data,
@@ -156,3 +158,26 @@ class TestGetLatestTree:
         )
 
         assert result is None
+
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="commits")
+    @patch("kernelCI_app.queries.tree.Checkouts")
+    def test_get_latest_tree_commits_read_path(self, mock_checkouts_model):
+        expected_result = {"git_commit_hash": "abc123", "tree_name": "mainline"}
+        mock_queryset = setup_mock_queryset(mock_checkouts_model, expected_result)
+        mock_checkouts_model.objects.filter.return_value = mock_queryset
+
+        result = get_latest_tree(
+            tree_name="mainline",
+            git_branch="master",
+            origin="maestro",
+            git_commit_hash="abc123",
+        )
+
+        assert result == expected_result
+        mock_checkouts_model.objects.filter.assert_called_once_with(
+            origin="maestro",
+            commit__isnull=False,
+            commit__git_repository_branch="master",
+            commit__tree_name="mainline",
+        )
+        mock_queryset.values.assert_called_once()
