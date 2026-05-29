@@ -653,10 +653,11 @@ class TestFlushBuffers:
         # So we check against the len of the original buffers
         mock_out.assert_called_once_with(
             "Flushed batch in %.3fs (%.1f items/s): "
-            "issues=%d checkouts=%d builds=%d tests=%d incidents=%d"
+            "commits=%d issues=%d checkouts=%d builds=%d tests=%d incidents=%d"
             % (
                 1,
                 total_items,
+                0,
                 n_issues,
                 n_checkouts,
                 n_builds,
@@ -750,10 +751,11 @@ class TestFlushBuffers:
                 call("Moved %s files to pending retry directory" % n_files),
                 call(
                     "Flushed batch in %.3fs (%.1f items/s): "
-                    "issues=%d checkouts=%d builds=%d tests=%d incidents=%d"
+                    "commits=%d issues=%d checkouts=%d builds=%d tests=%d incidents=%d"
                     % (
                         1,
                         total_items,
+                        0,
                         n_issues,
                         n_checkouts,
                         n_builds,

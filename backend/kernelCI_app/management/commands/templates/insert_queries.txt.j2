@@ -9,6 +9,15 @@ which fields are actually updateable for each model"""
 # flake8: noqa: E501  # Ignores long lines for better readability
 
 INSERT_QUERIES = {
+    "commits": {
+        "updateable_model_fields": [
+            {% for field in commits["updateable_model_fields"] -%}
+            "{{ field }}"{% if not loop.last %},
+            {% endif %}
+            {%- endfor %},
+        ],
+        "query": """{{commits["query"]}}""",
+    },
     "checkouts": {
         "updateable_model_fields": [
             {% for field in checkouts["updateable_model_fields"] -%}

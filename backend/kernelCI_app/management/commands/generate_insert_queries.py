@@ -6,6 +6,15 @@ from jinja2 import Template
 
 from kernelCI_app.typeModels.modelTypes import MODEL_MAP
 
+CONFLICT_TARGETS = {
+    "commits": (
+        "tree_name",
+        "git_repository_url",
+        "git_repository_branch",
+        "git_commit_hash",
+    ),
+}
+
 
 class Command(BaseCommand):
     help = """
@@ -30,7 +39,7 @@ class Command(BaseCommand):
             query_params_properties: list[tuple[str, str]] = []
 
             for field in model._meta.fields:
-                if field.generated:
+                if field.generated or (field.auto_created and field.primary_key):
                     continue
 
                 field_name = (
@@ -60,13 +69,15 @@ class Command(BaseCommand):
                     {field} = {op}({table_name}.{field}, EXCLUDED.{field})"""
                 )
 
+            conflict_target = ", ".join(CONFLICT_TARGETS.get(table_name, ("id",)))
+
             query = f"""
                 INSERT INTO {table_name} ({",".join(updateable_db_fields_clauses)}
                 )
                 VALUES (
                     {", ".join(["%s"] * len(updateable_db_fields))}
                 )
-                ON CONFLICT (id)
+                ON CONFLICT ({conflict_target})
                 DO UPDATE SET{",".join(conflict_clauses)};
             """
 
@@ -87,6 +98,7 @@ class Command(BaseCommand):
         template = Template(template_content)
         rendered_content = template.render(
             timestamp=datetime.now(),
+            commits=var_insert_queries["commits"],
             checkouts=var_insert_queries["checkouts"],
             issues=var_insert_queries["issues"],
             builds=var_insert_queries["builds"],

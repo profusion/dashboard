@@ -7,7 +7,7 @@ from prometheus_client import Counter
 from pydantic import ValidationError
 
 from kernelCI_app.constants.ingester import INGESTER_GRAFANA_LABEL
-from kernelCI_app.models import Builds, Checkouts, Incidents, Issues, Tests
+from kernelCI_app.models import Builds, Checkouts, Commits, Incidents, Issues, Tests
 from kernelCI_app.typeModels.modelTypes import TableNames
 
 
@@ -15,6 +15,7 @@ class ProcessedSubmission(TypedDict):
     """Stores the list of items in a single submission.
     Lists can't be None but can be empty."""
 
+    commits: list[Commits]
     issues: list[Issues]
     checkouts: list[Checkouts]
     builds: list[Builds]
@@ -41,6 +42,7 @@ def get_model_fields(model_fields) -> set[str]:
 
 ISSUE_FIELDS = get_model_fields(Issues._meta.get_fields())
 CHECKOUT_FIELDS = get_model_fields(Checkouts._meta.get_fields())
+COMMIT_FIELDS = get_model_fields(Commits._meta.get_fields()) - {"id"}
 BUILD_FIELDS = get_model_fields(Builds._meta.get_fields())
 TEST_FIELDS = get_model_fields(Tests._meta.get_fields())
 INCIDENT_FIELDS = get_model_fields(Incidents._meta.get_fields())
@@ -113,6 +115,18 @@ def make_checkout_instance(checkout: dict[str, Any]) -> Checkouts:
     return obj
 
 
+def make_commit_instance_from_checkout(checkout: dict[str, Any]) -> Commits | None:
+    if not checkout.get("git_commit_hash"):
+        return None
+
+    filtered_commit = {
+        key: value for key, value in checkout.items() if key in COMMIT_FIELDS
+    }
+    obj = Commits(**filtered_commit)
+    obj.field_timestamp = timezone.now()
+    return obj
+
+
 def make_build_instance(build: dict[str, Any]) -> Builds:
     filtered_build = {key: value for key, value in build.items() if key in BUILD_FIELDS}
     obj = Builds(**filtered_build)
@@ -151,6 +165,7 @@ def build_instances_from_submission(
         counters: a dict mapping tables to its prometheus counter
     """
     out: ProcessedSubmission = {
+        "commits": [],
         "issues": [],
         "checkouts": [],
         "builds": [],
@@ -176,6 +191,10 @@ def build_instances_from_submission(
                             ingester=INGESTER_GRAFANA_LABEL, origin=issue.origin
                         ).inc()
                     case "checkouts":
+                        commit = make_commit_instance_from_checkout(item)
+                        if commit is not None:
+                            out["commits"].append(commit)
+
                         checkout = make_checkout_instance(item)
                         out["checkouts"].append(checkout)
                         counters["checkouts"].labels(

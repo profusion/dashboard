@@ -37,7 +37,7 @@ from kernelCI_app.management.commands.helpers.process_submissions import (
     TableNames,
     build_instances_from_submission,
 )
-from kernelCI_app.models import Builds, Checkouts, Incidents, Issues, Tests
+from kernelCI_app.models import Builds, Checkouts, Commits, Incidents, Issues, Tests
 from kernelCI_app.typeModels.modelTypes import TableModels
 
 type INGESTER_DIRS = Literal["archive", "failed", "pending_retry"]
@@ -218,8 +218,57 @@ def consume_buffer(buffer: list[TableModels], table_name: TableNames) -> None:
     out("bulk_create %s: n=%d in %.3fs" % (table_name, len(buffer), time.time() - t0))
 
 
+def _commit_context_key_from_checkout(
+    checkout: Checkouts,
+) -> tuple[str | None, str | None, str | None, str] | None:
+    if not isinstance(checkout.git_commit_hash, str) or not checkout.git_commit_hash:
+        return None
+    return (
+        checkout.tree_name,
+        checkout.git_repository_url,
+        checkout.git_repository_branch,
+        checkout.git_commit_hash,
+    )
+
+
+def _commit_context_key_from_row(
+    row: tuple[int, str | None, str | None, str | None, str],
+) -> tuple[str | None, str | None, str | None, str]:
+    _, tree_name, git_repository_url, git_repository_branch, git_commit_hash = row
+    return (tree_name, git_repository_url, git_repository_branch, git_commit_hash)
+
+
+def assign_commit_ids(checkouts_buf: list[Checkouts]) -> None:
+    """Resolve nullable checkout.commit_id after commit rows have been upserted."""
+    checkout_keys = [
+        key
+        for checkout in checkouts_buf
+        if (key := _commit_context_key_from_checkout(checkout)) is not None
+    ]
+    commit_hashes = {key[3] for key in checkout_keys}
+    if not commit_hashes:
+        return
+
+    commit_rows = Commits.objects.filter(git_commit_hash__in=commit_hashes).values_list(
+        "id",
+        "tree_name",
+        "git_repository_url",
+        "git_repository_branch",
+        "git_commit_hash",
+    )
+    commit_ids_by_key = {
+        _commit_context_key_from_row(row): row[0] for row in commit_rows
+    }
+
+    for checkout in checkouts_buf:
+        key = _commit_context_key_from_checkout(checkout)
+        if key is not None:
+            checkout.commit_id = commit_ids_by_key.get(key)
+
+
 def flush_buffers(
     *,
+    commits_buf: list[Commits] | None = None,
     issues_buf: list[Issues],
     checkouts_buf: list[Checkouts],
     builds_buf: list[Builds],
@@ -234,8 +283,12 @@ def flush_buffers(
     """
     Consumes the list of objects and tries to insert them into the database.
     """
+    if commits_buf is None:
+        commits_buf = []
+
     total = (
-        len(issues_buf)
+        len(commits_buf)
+        + len(issues_buf)
         + len(checkouts_buf)
         + len(builds_buf)
         + len(tests_buf)
@@ -250,6 +303,9 @@ def flush_buffers(
     try:
         # Single transaction for all tables in the flush
         with transaction.atomic():
+            if commits_buf:
+                consume_buffer(commits_buf, "commits")
+            assign_commit_ids(checkouts_buf)
             consume_buffer(issues_buf, "issues")
             consume_buffer(checkouts_buf, "checkouts")
             consume_buffer(builds_buf, "builds")
@@ -281,10 +337,11 @@ def flush_buffers(
         rate = total / flush_dur if flush_dur > 0 else 0.0
         msg = (
             "Flushed batch in %.3fs (%.1f items/s): "
-            "issues=%d checkouts=%d builds=%d tests=%d incidents=%d"
+            "commits=%d issues=%d checkouts=%d builds=%d tests=%d incidents=%d"
             % (
                 flush_dur,
                 rate,
+                len(commits_buf),
                 len(issues_buf),
                 len(checkouts_buf),
                 len(builds_buf),
@@ -293,6 +350,7 @@ def flush_buffers(
             )
         )
         out(msg)
+        commits_buf.clear()
         issues_buf.clear()
         checkouts_buf.clear()
         builds_buf.clear()
@@ -311,6 +369,7 @@ MAP_TABLENAMES_TO_COUNTER: dict[TableNames, Counter] = {
 
 
 class SubmissionsInstances(TypedDict):
+    commits: list[Commits]
     issues: list[Issues]
     checkouts: list[Checkouts]
     builds: list[Builds]
@@ -331,6 +390,7 @@ def process_batch(
     connections.close_all()
 
     instances_dict: SubmissionsInstances = {
+        "commits": [],
         "issues": [],
         "checkouts": [],
         "builds": [],
@@ -370,6 +430,7 @@ def process_batch(
 
             instances = build_instances_from_submission(data, MAP_TABLENAMES_TO_COUNTER)
 
+            instances_dict["commits"].extend(instances["commits"])
             instances_dict["issues"].extend(instances["issues"])
             instances_dict["checkouts"].extend(instances["checkouts"])
             instances_dict["builds"].extend(instances["builds"])
@@ -379,22 +440,35 @@ def process_batch(
             buffer_files.add((file["name"], file["path"]))
 
         # Sort instances to prevent deadlocks when multiple transactions update the same rows
+        instances_dict["commits"].sort(
+            key=lambda x: (
+                x.tree_name or "",
+                x.git_repository_url or "",
+                x.git_repository_branch or "",
+                x.git_commit_hash,
+            )
+        )
         instances_dict["issues"].sort(key=lambda x: x.id)
         instances_dict["checkouts"].sort(key=lambda x: x.id)
         instances_dict["builds"].sort(key=lambda x: x.id)
         instances_dict["tests"].sort(key=lambda x: x.id)
         instances_dict["incidents"].sort(key=lambda x: x.id)
 
+        should_flush_checkouts = len(instances_dict["checkouts"]) >= INGEST_BATCH_SIZE
+        should_flush_commits = (
+            should_flush_checkouts
+            or len(instances_dict["commits"]) >= INGEST_BATCH_SIZE
+        )
+
         flush_buffers(
+            commits_buf=(instances_dict["commits"] if should_flush_commits else []),
             issues_buf=(
                 instances_dict["issues"]
                 if len(instances_dict["issues"]) >= INGEST_BATCH_SIZE
                 else []
             ),
             checkouts_buf=(
-                instances_dict["checkouts"]
-                if len(instances_dict["checkouts"]) >= INGEST_BATCH_SIZE
-                else []
+                instances_dict["checkouts"] if should_flush_checkouts else []
             ),
             builds_buf=(
                 instances_dict["builds"]
@@ -421,6 +495,7 @@ def process_batch(
     if any(len(instances_dict[table]) for table in instances_dict):
         out("Process finished, flushing remaining buffers")
         flush_buffers(
+            commits_buf=instances_dict["commits"],
             issues_buf=instances_dict["issues"],
             checkouts_buf=instances_dict["checkouts"],
             builds_buf=instances_dict["builds"],

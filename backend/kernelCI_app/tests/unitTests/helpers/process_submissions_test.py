@@ -16,11 +16,12 @@ from kernelCI_app.management.commands.helpers.process_submissions import (
     insert_submission_data,
     make_build_instance,
     make_checkout_instance,
+    make_commit_instance_from_checkout,
     make_incident_instance,
     make_issue_instance,
     make_test_instance,
 )
-from kernelCI_app.models import Builds, Checkouts, Incidents, Issues, Tests
+from kernelCI_app.models import Builds, Checkouts, Commits, Incidents, Issues, Tests
 
 MOCK_TIME = timezone.datetime(2025, 10, 11, 12, 0, 0)
 
@@ -177,6 +178,48 @@ class TestMakeCheckoutInstance(SimpleTestCase):
         }
         actual_fields = {field: getattr(result, field) for field in expected_fields}
         self.assertEqual(actual_fields, expected_fields)
+
+
+@patch("kernelCI_app.management.commands.helpers.process_submissions.timezone.now")
+class TestMakeCommitInstanceFromCheckout(SimpleTestCase):
+    def test_make_commit_instance_from_checkout_with_hash(self, mock_now):
+        mock_now.return_value = MOCK_TIME
+        checkout_data = {
+            "id": "checkout",
+            "tree_name": "mainline",
+            "git_repository_url": "https://my_git_url.com",
+            "git_commit_hash": "abc123",
+            "git_repository_branch": "master",
+            "git_commit_name": "v6.1",
+            "git_commit_message": "commit message",
+            "extra_field": "should_be_filtered",
+        }
+
+        result = make_commit_instance_from_checkout(checkout_data)
+
+        self.assertIsInstance(result, Commits)
+        self.assertFalse(hasattr(result, "extra_field"))
+        self.assertIsNone(result.id)
+
+        expected_fields = {
+            "tree_name": "mainline",
+            "git_repository_url": "https://my_git_url.com",
+            "git_commit_hash": "abc123",
+            "git_repository_branch": "master",
+            "git_commit_name": "v6.1",
+            "git_commit_message": "commit message",
+            "field_timestamp": MOCK_TIME,
+        }
+        actual_fields = {field: getattr(result, field) for field in expected_fields}
+        self.assertEqual(actual_fields, expected_fields)
+
+    def test_make_commit_instance_from_checkout_without_hash(self, mock_now):
+        result = make_commit_instance_from_checkout(
+            {"id": "checkout", "tree_name": "mainline"}
+        )
+
+        self.assertIsNone(result)
+        mock_now.assert_not_called()
 
 
 @patch("kernelCI_app.management.commands.helpers.process_submissions.timezone.now")
@@ -337,6 +380,7 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
         )
 
         expected = {
+            "commits": [],
             "issues": [mock_make_issue.return_value],
             "checkouts": [mock_make_checkout.return_value],
             "builds": [mock_make_build.return_value],
@@ -355,6 +399,7 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
         result = build_instances_from_submission({}, MAP_TABLENAMES_TO_COUNTER)
 
         expected = {
+            "commits": [],
             "issues": [],
             "checkouts": [],
             "builds": [],
