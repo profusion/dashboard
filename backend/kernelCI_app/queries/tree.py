@@ -196,6 +196,9 @@ def get_tree_listing_data(origin: str, interval_in_days: int) -> Optional[list[d
 def get_tree_listing_fast(
     *, origin: Optional[str] = None, interval: dict
 ) -> list[Checkouts]:
+    if _use_commits_read_path():
+        return _get_tree_listing_fast_from_commits(origin=origin, interval=interval)
+
     interval_timestamp = get_query_time_interval(**interval).timestamp()
     params = {"interval": interval_timestamp}
 
@@ -233,6 +236,63 @@ def get_tree_listing_fast(
             WHERE
                 {origin_clause}
                 start_time >= TO_TIMESTAMP(%(interval)s)
+        )
+        SELECT
+            *
+        FROM
+            ordered_checkouts
+        WHERE
+            time_order = 1
+        ORDER BY
+            tree_name ASC;
+        """,
+        params,
+    )
+
+    return list(checkouts)
+
+
+def _get_tree_listing_fast_from_commits(
+    *, origin: Optional[str] = None, interval: dict
+) -> list[Checkouts]:
+    interval_timestamp = get_query_time_interval(**interval).timestamp()
+    params = {"interval": interval_timestamp}
+
+    if origin:
+        origin_clause = "checkouts.origin = %(origin)s AND"
+        params["origin"] = origin
+    else:
+        origin_clause = ""
+
+    checkouts = Checkouts.objects.raw(
+        f"""
+        WITH ordered_checkouts AS (
+            SELECT
+                checkouts.id,
+                commits.tree_name,
+                checkouts.origin,
+                commits.git_repository_branch,
+                commits.git_repository_url,
+                commits.git_commit_hash,
+                commits.git_commit_name,
+                commits.git_commit_tags,
+                checkouts.patchset_hash,
+                checkouts.start_time,
+                checkouts.origin_builds_finish_time,
+                checkouts.origin_tests_finish_time,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        commits.git_repository_branch,
+                        commits.git_repository_url,
+                        checkouts.origin
+                    ORDER BY checkouts.start_time DESC
+                ) AS time_order
+            FROM
+                checkouts
+                JOIN commits ON checkouts.commit_id = commits.id
+            WHERE
+                {origin_clause}
+                checkouts.start_time >= TO_TIMESTAMP(%(interval)s)
         )
         SELECT
             *

@@ -53,6 +53,23 @@ class TestGetTreeListingFast:
 
         assert result == []
 
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="commits")
+    @patch("kernelCI_app.queries.tree.get_query_time_interval")
+    @patch("kernelCI_app.queries.tree.Checkouts")
+    def test_get_tree_listing_fast_commits_read_path(
+        self, mock_checkouts_model, mock_get_interval
+    ):
+        mock_get_interval.return_value.timestamp.return_value = 1704067200.0
+        mock_checkouts_model.objects.raw.return_value = [Mock(id="checkout")]
+
+        result = get_tree_listing_fast(origin="maestro", interval={"days": 7})
+
+        query = mock_checkouts_model.objects.raw.call_args.args[0]
+        params = mock_checkouts_model.objects.raw.call_args.args[1]
+        assert len(result) == 1
+        assert "JOIN commits ON checkouts.commit_id = commits.id" in query
+        assert params["origin"] == "maestro"
+
 
 class TestGetTreeListingDataByCheckoutId:
     @patch("kernelCI_app.queries.tree.dict_fetchall")
