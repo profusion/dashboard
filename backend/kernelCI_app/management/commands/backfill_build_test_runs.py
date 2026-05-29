@@ -18,6 +18,11 @@ class Command(BaseCommand):
         parser.add_argument("--batch-size", type=int, default=5000)
         parser.add_argument("--max-batches", type=int)
         parser.add_argument("--resume-from-id", default="")
+        parser.add_argument(
+            "--missing-only",
+            action="store_true",
+            help="Only process legacy rows without matching run rows.",
+        )
         parser.add_argument("--dry-run", action="store_true")
 
     def handle(self, *args, **options):
@@ -30,14 +35,19 @@ class Command(BaseCommand):
         if max_batches is not None and max_batches <= 0:
             raise CommandError("--max-batches must be greater than zero")
         resume_from_id = options["resume_from_id"]
+        missing_only = options["missing_only"]
         dry_run = options["dry_run"]
 
         if phase in {"all", "builds"}:
-            self._backfill_builds(batch_size, resume_from_id, dry_run, max_batches)
+            self._backfill_builds(
+                batch_size, resume_from_id, dry_run, max_batches, missing_only
+            )
         if phase in {"all", "tests"}:
             if phase == "all" and resume_from_id:
                 resume_from_id = ""
-            self._backfill_tests(batch_size, resume_from_id, dry_run, max_batches)
+            self._backfill_tests(
+                batch_size, resume_from_id, dry_run, max_batches, missing_only
+            )
         if phase in {"all", "incidents"}:
             self._backfill_incidents(dry_run)
 
@@ -47,6 +57,7 @@ class Command(BaseCommand):
         resume_from_id: str,
         dry_run: bool,
         max_batches: int | None,
+        missing_only: bool,
     ) -> None:
         total = 0
         batches = 0
@@ -54,7 +65,7 @@ class Command(BaseCommand):
         while True:
             if max_batches is not None and batches >= max_batches:
                 break
-            build_ids = self._next_ids("builds", batch_size, last_id)
+            build_ids = self._next_ids("builds", batch_size, last_id, missing_only)
             if not build_ids:
                 break
 
@@ -82,6 +93,7 @@ class Command(BaseCommand):
         resume_from_id: str,
         dry_run: bool,
         max_batches: int | None,
+        missing_only: bool,
     ) -> None:
         total = 0
         batches = 0
@@ -89,7 +101,7 @@ class Command(BaseCommand):
         while True:
             if max_batches is not None and batches >= max_batches:
                 break
-            test_ids = self._next_ids("tests", batch_size, last_id)
+            test_ids = self._next_ids("tests", batch_size, last_id, missing_only)
             if not test_ids:
                 break
 
@@ -166,14 +178,32 @@ class Command(BaseCommand):
         )
 
     def _next_ids(
-        self, table_name: Literal["builds", "tests"], batch_size: int, last_id: str
+        self,
+        table_name: Literal["builds", "tests"],
+        batch_size: int,
+        last_id: str,
+        missing_only: bool,
     ):
+        run_table_name = {
+            "builds": "build_runs",
+            "tests": "test_runs",
+        }[table_name]
+        missing_clause = ""
+        if missing_only:
+            missing_clause = f"""
+                AND NOT EXISTS (
+                    SELECT 1 FROM {run_table_name}
+                    WHERE {run_table_name}.id = {table_name}.id
+                )
+            """
+
         with connection.cursor() as cursor:
             cursor.execute(
                 f"""
                 SELECT id
                 FROM {table_name}
                 WHERE id > %s
+                {missing_clause}
                 ORDER BY id
                 LIMIT %s
                 """,
