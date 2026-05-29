@@ -24,6 +24,45 @@ class SimplifiedStatusChoices(models.TextChoices):
     INCONCLUSIVE = "I"
 
 
+class Commits(models.Model):
+    field_timestamp = models.DateTimeField(
+        db_column="_timestamp", blank=True, null=True
+    )
+    tree_name = models.TextField(blank=True, null=True)
+    git_repository_url = models.TextField(blank=True, null=True)
+    git_commit_hash = models.TextField()
+    git_commit_name = models.TextField(blank=True, null=True)
+    git_repository_branch = models.TextField(blank=True, null=True)
+    git_commit_message = models.TextField(blank=True, null=True)
+    git_repository_branch_tip = models.BooleanField(blank=True, null=True)
+    git_commit_tags = ArrayField(models.TextField(), blank=True, null=True)
+    patchset_files = models.JSONField(blank=True, null=True)
+    patchset_hash = models.TextField(blank=True, null=True)
+    message_id = models.TextField(blank=True, null=True)
+    comment = models.TextField(blank=True, null=True)
+    commit_time = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        db_table = "commits"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "tree_name",
+                    "git_repository_url",
+                    "git_repository_branch",
+                    "git_commit_hash",
+                ],
+                name="commits_context_unique",
+                nulls_distinct=False,
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["field_timestamp"], name="commits__timestamp"),
+            models.Index(fields=["git_commit_hash"], name="commits_hash"),
+            GinIndex(fields=["git_commit_tags"], name="commits_tags"),
+        ]
+
+
 class Issues(models.Model):
     field_timestamp = models.DateTimeField(
         db_column="_timestamp", blank=True, null=True
@@ -57,6 +96,14 @@ class Checkouts(models.Model):
     # time this entry was ingested
     field_timestamp = models.DateTimeField(
         db_column="_timestamp", blank=True, null=True
+    )
+    commit = models.ForeignKey(
+        Commits,
+        db_constraint=False,
+        db_index=False,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
     )
     id = models.TextField(primary_key=True)
     origin = models.TextField()
@@ -93,6 +140,10 @@ class Checkouts(models.Model):
             models.Index(fields=["origin"], name="checkouts_origin"),
             models.Index(fields=["start_time"], name="checkouts_start_time"),
             models.Index(fields=["tree_name"], name="checkouts_tree_name"),
+            models.Index(
+                fields=["commit", "origin", "start_time"],
+                name="checkouts_commit_origin_time",
+            ),
         ]
 
 
