@@ -19,7 +19,11 @@ def _use_commits_read_path() -> bool:
     return settings.DB_SCHEMA_REFACTOR_READ_PATH in {"commits", "runs"}
 
 
-def _get_tree_listing_count_clause() -> str:
+def _use_runs_read_path() -> bool:
+    return settings.DB_SCHEMA_REFACTOR_READ_PATH == "runs"
+
+
+def _get_tree_listing_count_clause(test_path_expression: str = "tests.path") -> str:
     build_count_clause = """
         COUNT(DISTINCT CASE WHEN (builds.status = 'PASS' AND builds.id NOT LIKE 'maestro:dummy_%%')
             THEN builds.id END) AS pass_builds,
@@ -37,37 +41,37 @@ def _get_tree_listing_count_clause() -> str:
             THEN builds.id END) AS skip_builds,
     """
 
-    test_count_clause = """
-        COUNT(CASE WHEN (tests.path <> 'boot' AND tests.path NOT LIKE 'boot.%%')
+    test_count_clause = f"""
+        COUNT(CASE WHEN ({test_path_expression} <> 'boot' AND {test_path_expression} NOT LIKE 'boot.%%')
             AND tests.status = 'FAIL' THEN 1 END) AS fail_tests,
-        COUNT(CASE WHEN (tests.path <> 'boot' AND tests.path NOT LIKE 'boot.%%')
+        COUNT(CASE WHEN ({test_path_expression} <> 'boot' AND {test_path_expression} NOT LIKE 'boot.%%')
             AND tests.status = 'ERROR' THEN 1 END) AS error_tests,
-        COUNT(CASE WHEN (tests.path <> 'boot' AND tests.path NOT LIKE 'boot.%%')
+        COUNT(CASE WHEN ({test_path_expression} <> 'boot' AND {test_path_expression} NOT LIKE 'boot.%%')
             AND tests.status = 'MISS' THEN 1 END) AS miss_tests,
-        COUNT(CASE WHEN (tests.path <> 'boot' AND tests.path NOT LIKE 'boot.%%')
+        COUNT(CASE WHEN ({test_path_expression} <> 'boot' AND {test_path_expression} NOT LIKE 'boot.%%')
             AND tests.status = 'PASS' THEN 1 END) AS pass_tests,
-        COUNT(CASE WHEN (tests.path <> 'boot' AND tests.path NOT LIKE 'boot.%%')
+        COUNT(CASE WHEN ({test_path_expression} <> 'boot' AND {test_path_expression} NOT LIKE 'boot.%%')
             AND tests.status = 'DONE' THEN 1 END) AS done_tests,
-        COUNT(CASE WHEN (tests.path <> 'boot' AND tests.path NOT LIKE 'boot.%%')
+        COUNT(CASE WHEN ({test_path_expression} <> 'boot' AND {test_path_expression} NOT LIKE 'boot.%%')
             AND tests.status = 'SKIP' THEN 1 END) AS skip_tests,
-        SUM(CASE WHEN (tests.path <> 'boot' AND tests.path NOT LIKE 'boot.%%')
+        SUM(CASE WHEN ({test_path_expression} <> 'boot' AND {test_path_expression} NOT LIKE 'boot.%%')
             AND tests.status IS NULL AND tests.id IS NOT NULL THEN 1 ELSE 0 END) AS null_tests,
     """
 
-    boot_count_clause = """
-        COUNT(CASE WHEN (tests.path = 'boot' OR tests.path LIKE 'boot.%%')
+    boot_count_clause = f"""
+        COUNT(CASE WHEN ({test_path_expression} = 'boot' OR {test_path_expression} LIKE 'boot.%%')
             AND tests.status = 'FAIL' THEN 1 END) AS fail_boots,
-        COUNT(CASE WHEN (tests.path = 'boot' OR tests.path LIKE 'boot.%%')
+        COUNT(CASE WHEN ({test_path_expression} = 'boot' OR {test_path_expression} LIKE 'boot.%%')
             AND tests.status = 'ERROR' THEN 1 END) AS error_boots,
-        COUNT(CASE WHEN (tests.path = 'boot' OR tests.path LIKE 'boot.%%')
+        COUNT(CASE WHEN ({test_path_expression} = 'boot' OR {test_path_expression} LIKE 'boot.%%')
             AND tests.status = 'MISS' THEN 1 END) AS miss_boots,
-        COUNT(CASE WHEN (tests.path = 'boot' OR tests.path LIKE 'boot.%%')
+        COUNT(CASE WHEN ({test_path_expression} = 'boot' OR {test_path_expression} LIKE 'boot.%%')
             AND tests.status = 'PASS' THEN 1 END) AS pass_boots,
-        COUNT(CASE WHEN (tests.path = 'boot' OR tests.path LIKE 'boot.%%')
+        COUNT(CASE WHEN ({test_path_expression} = 'boot' OR {test_path_expression} LIKE 'boot.%%')
             AND tests.status = 'DONE' THEN 1 END) AS done_boots,
-        COUNT(CASE WHEN (tests.path = 'boot' OR tests.path LIKE 'boot.%%')
+        COUNT(CASE WHEN ({test_path_expression} = 'boot' OR {test_path_expression} LIKE 'boot.%%')
             AND tests.status = 'SKIP' THEN 1 END) AS skip_boots,
-        SUM(CASE WHEN (tests.path = 'boot' OR tests.path LIKE 'boot.%%')
+        SUM(CASE WHEN ({test_path_expression} = 'boot' OR {test_path_expression} LIKE 'boot.%%')
             AND tests.status IS NULL AND tests.id IS NOT NULL THEN 1 ELSE 0 END) AS null_boots,
     """
 
@@ -126,6 +130,12 @@ def get_tree_listing_query(with_clause, join_clause, where_clause):
 
 
 def get_tree_listing_data(origin: str, interval_in_days: int) -> Optional[list[dict]]:
+    if _use_runs_read_path():
+        return _get_tree_listing_data_from_runs(
+            origin=origin,
+            interval_in_days=interval_in_days,
+        )
+
     params = {
         "origin_param": origin,
         "interval_param": interval_in_days,
@@ -185,6 +195,102 @@ def get_tree_listing_data(origin: str, interval_in_days: int) -> Optional[list[d
         join_clause=join_clause,
         where_clause=where_clause,
     )
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        return dict_fetchall(cursor=cursor)
+
+
+def _get_tree_listing_data_from_runs(
+    origin: str, interval_in_days: int
+) -> Optional[list[dict]]:
+    params = {
+        "origin_param": origin,
+        "interval_param": interval_in_days,
+    }
+    count_clauses = _get_tree_listing_count_clause(
+        test_path_expression="test_definitions.path"
+    )
+
+    query = f"""
+            WITH
+                ORDERED_CHECKOUTS_BY_TREE AS (
+                    SELECT
+                        commits.GIT_REPOSITORY_BRANCH,
+                        commits.GIT_REPOSITORY_URL,
+                        commits.GIT_COMMIT_HASH,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY
+                                commits.GIT_REPOSITORY_BRANCH,
+                                commits.GIT_REPOSITORY_URL
+                            ORDER BY
+                                checkouts.START_TIME DESC
+                        ) AS TIME_ORDER
+                    FROM
+                        CHECKOUTS
+                        JOIN commits ON checkouts.commit_id = commits.id
+                    WHERE
+                        checkouts.ORIGIN = %(origin_param)s
+                        AND checkouts.START_TIME >= NOW() - INTERVAL '%(interval_param)s days'
+                ),
+                FIRST_TREE_CHECKOUT AS (
+                    SELECT
+                        GIT_REPOSITORY_BRANCH,
+                        GIT_REPOSITORY_URL,
+                        GIT_COMMIT_HASH
+                    FROM
+                        ORDERED_CHECKOUTS_BY_TREE
+                    WHERE
+                        TIME_ORDER = 1
+                )
+            SELECT
+                MAX(checkouts.id) AS checkout_id,
+                commits.tree_name,
+                commits.git_repository_branch,
+                commits.git_repository_url,
+                commits.git_commit_hash,
+                checkouts.origin_builds_finish_time,
+                checkouts.origin_tests_finish_time,
+                CASE
+                    WHEN COUNT(DISTINCT commits.git_commit_tags) > 0 THEN COALESCE(
+                        ARRAY_AGG(DISTINCT commits.git_commit_tags) FILTER (
+                            WHERE
+                                commits.git_commit_tags IS NOT NULL
+                                AND commits.git_commit_tags::TEXT <> '{"{}"}'
+                        ),
+                        ARRAY[]::TEXT[]
+                    )
+                    ELSE ARRAY[]::TEXT[]
+                END AS git_commit_tags,
+                MAX(commits.git_commit_name) AS git_commit_name,
+                MAX(checkouts.start_time) AS start_time,
+                {count_clauses}
+                checkouts.origin
+            FROM
+                checkouts
+                JOIN commits ON checkouts.commit_id = commits.id
+                LEFT JOIN build_runs AS builds ON builds.checkout_id = checkouts.id
+                LEFT JOIN test_runs AS tests ON tests.build_run_id = builds.id
+                LEFT JOIN test_definitions
+                    ON test_definitions.id = tests.test_definition_id
+                JOIN FIRST_TREE_CHECKOUT FTC ON (
+                    commits.git_repository_branch IS NOT DISTINCT FROM FTC.GIT_REPOSITORY_BRANCH
+                    AND commits.git_repository_url IS NOT DISTINCT FROM FTC.GIT_REPOSITORY_URL
+                    AND commits.git_commit_hash = FTC.GIT_COMMIT_HASH
+                )
+            WHERE
+                checkouts.origin = %(origin_param)s
+            GROUP BY
+                commits.git_commit_hash,
+                commits.git_repository_branch,
+                commits.git_repository_url,
+                commits.tree_name,
+                checkouts.origin_builds_finish_time,
+                checkouts.origin_tests_finish_time,
+                checkouts.origin
+            ORDER BY
+                commits.git_commit_hash
+            """
 
     with connection.cursor() as cursor:
         cursor.execute(query, params)

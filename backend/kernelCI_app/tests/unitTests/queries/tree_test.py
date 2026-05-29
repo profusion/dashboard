@@ -27,6 +27,27 @@ class TestGetTreeListingData:
 
         assert result == expected_result
 
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.tree.dict_fetchall")
+    @patch("kernelCI_app.queries.tree.connection")
+    def test_get_tree_listing_data_runs_read_path(
+        self, mock_connection, mock_dict_fetchall
+    ):
+        expected_result = [{"checkout_id": "checkout", "tree_name": "mainline"}]
+        mock_dict_fetchall.return_value = expected_result
+        mock_cursor = setup_mock_cursor(mock_connection)
+
+        result = get_tree_listing_data(origin="maestro", interval_in_days=7)
+
+        query = mock_cursor.execute.call_args.args[0]
+        params = mock_cursor.execute.call_args.args[1]
+        assert result == expected_result
+        assert "JOIN commits ON checkouts.commit_id = commits.id" in query
+        assert "LEFT JOIN build_runs AS builds" in query
+        assert "LEFT JOIN test_runs AS tests" in query
+        assert "test_definitions.path" in query
+        assert params["origin_param"] == "maestro"
+
 
 class TestGetTreeListingFast:
     @patch("kernelCI_app.queries.tree.get_query_time_interval")
