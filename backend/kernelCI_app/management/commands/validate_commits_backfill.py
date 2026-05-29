@@ -60,14 +60,17 @@ class Command(BaseCommand):
                     COUNT(*) FILTER (
                         WHERE checkout.git_commit_hash IS NOT NULL
                             AND checkout.commit_id IS NOT NULL
-                            AND NOT (
-                                commits.tree_name IS NOT DISTINCT FROM
-                                    checkout.tree_name
-                                AND commits.git_repository_url IS NOT DISTINCT FROM
-                                    checkout.git_repository_url
-                                AND commits.git_repository_branch IS NOT DISTINCT FROM
-                                    checkout.git_repository_branch
-                                AND commits.git_commit_hash = checkout.git_commit_hash
+                            AND (
+                                commits.id IS NULL
+                                OR NOT (
+                                    commits.tree_name IS NOT DISTINCT FROM
+                                        checkout.tree_name
+                                    AND commits.git_repository_url IS NOT DISTINCT FROM
+                                        checkout.git_repository_url
+                                    AND commits.git_repository_branch IS NOT DISTINCT FROM
+                                        checkout.git_repository_branch
+                                    AND commits.git_commit_hash = checkout.git_commit_hash
+                                )
                             )
                     ) AS mismatched_links
                 FROM checkouts AS checkout
@@ -106,6 +109,7 @@ class Command(BaseCommand):
                 WHERE checkout.git_commit_hash IS NOT NULL
                     AND (
                         checkout.commit_id IS NULL
+                        OR commits.id IS NULL
                         OR NOT (
                             commits.tree_name IS NOT DISTINCT FROM checkout.tree_name
                             AND commits.git_repository_url IS NOT DISTINCT FROM
