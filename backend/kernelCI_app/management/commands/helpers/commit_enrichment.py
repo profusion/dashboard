@@ -95,17 +95,16 @@ def _ensure_repo_cache(git_url: str) -> Path:
     if repo_dir.exists():
         return repo_dir
 
+    repo_dir.mkdir(parents=True)
     _run_git(
         [
             "git",
-            "clone",
+            "init",
             "--bare",
-            "--filter=blob:none",
-            "--no-tags",
-            git_url,
             str(repo_dir),
         ]
     )
+    _run_git(["git", "-C", str(repo_dir), "remote", "add", "origin", git_url])
     return repo_dir
 
 

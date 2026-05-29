@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kernelCI_app.management.commands.helpers.commit_enrichment import (
+    _ensure_repo_cache,
     enrich_commit_checkout,
     enrich_commit_checkouts,
 )
@@ -100,3 +101,23 @@ def test_enrich_commit_checkout_with_mocked_git(
     assert result["git_repository_branch_tip"] is True
     assert result["git_commit_tags"] == ["v6.1"]
     assert result["commit_time"].isoformat() == "2026-05-29T12:00:00+00:00"
+
+
+@patch("kernelCI_app.management.commands.helpers.commit_enrichment._run_git")
+def test_ensure_repo_cache_initializes_empty_bare_repo(
+    mock_run_git, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "kernelCI_app.management.commands.helpers.commit_enrichment.GIT_CACHE_DIR",
+        tmp_path,
+    )
+
+    repo_dir = _ensure_repo_cache("https://example.com/repo.git")
+
+    assert repo_dir.exists()
+    assert mock_run_git.call_count == 2
+    assert mock_run_git.call_args_list[0].args[0][:3] == ["git", "init", "--bare"]
+    assert mock_run_git.call_args_list[1].args[0][-2:] == [
+        "origin",
+        "https://example.com/repo.git",
+    ]
