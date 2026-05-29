@@ -199,6 +199,75 @@ class Builds(models.Model):
         ]
 
 
+class BuildDefinitions(models.Model):
+    field_timestamp = models.DateTimeField(
+        db_column="_timestamp", blank=True, null=True
+    )
+    checkout = models.ForeignKey(
+        Checkouts, db_constraint=False, on_delete=models.DO_NOTHING
+    )
+    origin = models.TextField()
+    architecture = models.TextField(blank=True, null=True)
+    compiler = models.TextField(blank=True, null=True)
+    config_name = models.TextField(blank=True, null=True)
+    series = models.TextField()
+
+    class Meta:
+        db_table = "build_definitions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["checkout", "series"],
+                name="build_definitions_checkout_series_unique",
+                nulls_distinct=False,
+            )
+        ]
+        indexes = [
+            models.Index(fields=["field_timestamp"], name="build_defs__timestamp"),
+            models.Index(
+                fields=["checkout", "series"], name="build_defs_checkout_series"
+            ),
+            models.Index(fields=["origin"], name="build_defs_origin"),
+        ]
+
+
+class BuildRuns(models.Model):
+    field_timestamp = models.DateTimeField(
+        db_column="_timestamp", blank=True, null=True
+    )
+    id = models.TextField(primary_key=True)
+    build_definition = models.ForeignKey(
+        BuildDefinitions, db_constraint=False, on_delete=models.DO_NOTHING
+    )
+    checkout = models.ForeignKey(
+        Checkouts, db_constraint=False, on_delete=models.DO_NOTHING
+    )
+    origin = models.TextField()
+    comment = models.TextField(blank=True, null=True)
+    start_time = models.DateTimeField(blank=True, null=True)
+    duration = models.FloatField(blank=True, null=True)
+    command = models.TextField(blank=True, null=True)
+    input_files = models.JSONField(blank=True, null=True)
+    output_files = models.JSONField(blank=True, null=True)
+    config_url = models.TextField(blank=True, null=True)
+    log_url = models.TextField(blank=True, null=True)
+    log_excerpt = models.CharField(max_length=16384, blank=True, null=True)
+    misc = models.JSONField(blank=True, null=True)
+    status = models.CharField(
+        max_length=10, choices=StatusChoices.choices, blank=True, null=True
+    )
+
+    class Meta:
+        db_table = "build_runs"
+        indexes = [
+            models.Index(fields=["field_timestamp"], name="build_runs__timestamp"),
+            models.Index(fields=["build_definition"], name="build_runs_definition"),
+            models.Index(fields=["checkout"], name="build_runs_checkout"),
+            models.Index(fields=["origin"], name="build_runs_origin"),
+            models.Index(fields=["start_time"], name="build_runs_start_time"),
+            models.Index(fields=["status"], name="build_runs_status"),
+        ]
+
+
 class Tests(models.Model):
     # Disables automatic pytest test discovery for this class
     __test__ = False
@@ -267,6 +336,80 @@ class Tests(models.Model):
         ]
 
 
+class TestDefinitions(models.Model):
+    field_timestamp = models.DateTimeField(
+        db_column="_timestamp", blank=True, null=True
+    )
+    build_definition = models.ForeignKey(
+        BuildDefinitions, db_constraint=False, on_delete=models.DO_NOTHING
+    )
+    path = models.TextField(blank=True, null=True)
+    number_prefix = models.CharField(
+        max_length=10, choices=Tests.UnitPrefix.choices, blank=True, null=True
+    )
+    number_unit = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "test_definitions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["build_definition", "path", "number_prefix", "number_unit"],
+                name="test_definitions_build_path_number_unique",
+                nulls_distinct=False,
+            )
+        ]
+        indexes = [
+            models.Index(fields=["field_timestamp"], name="test_defs__timestamp"),
+            models.Index(fields=["build_definition"], name="test_defs_build_def"),
+            models.Index(fields=["path"], name="test_defs_path"),
+        ]
+
+
+class TestRuns(models.Model):
+    field_timestamp = models.DateTimeField(
+        db_column="_timestamp", blank=True, null=True
+    )
+    id = models.TextField(primary_key=True)
+    test_definition = models.ForeignKey(
+        TestDefinitions, db_constraint=False, on_delete=models.DO_NOTHING
+    )
+    build_run = models.ForeignKey(
+        BuildRuns, db_constraint=False, on_delete=models.DO_NOTHING
+    )
+    origin = models.TextField()
+    environment_comment = models.TextField(blank=True, null=True)
+    environment_misc = models.JSONField(blank=True, null=True)
+    comment = models.TextField(blank=True, null=True)
+    log_url = models.TextField(blank=True, null=True)
+    log_excerpt = models.CharField(max_length=16384, blank=True, null=True)
+    status = models.CharField(
+        max_length=10, choices=StatusChoices.choices, blank=True, null=True
+    )
+    start_time = models.DateTimeField(blank=True, null=True)
+    duration = models.FloatField(blank=True, null=True)
+    input_files = models.JSONField(blank=True, null=True)
+    output_files = models.JSONField(blank=True, null=True)
+    misc = models.JSONField(blank=True, null=True)
+    number_value = models.FloatField(blank=True, null=True)
+    environment_compatible = ArrayField(models.TextField(), blank=True, null=True)
+
+    class Meta:
+        db_table = "test_runs"
+        indexes = [
+            models.Index(fields=["field_timestamp"], name="test_runs__timestamp"),
+            models.Index(fields=["test_definition"], name="test_runs_definition"),
+            models.Index(fields=["build_run"], name="test_runs_build_run"),
+            GinIndex(fields=["environment_compatible"], name="test_runs_compatible"),
+            models.Index(fields=["origin"], name="test_runs_origin"),
+            models.Index(
+                RawSQL("(environment_misc ->> 'platform')", []),
+                name="test_runs_platform_idx",
+            ),
+            models.Index(fields=["start_time"], name="test_runs_start_time"),
+            models.Index(fields=["status"], name="test_runs_status"),
+        ]
+
+
 class Incidents(models.Model):
     field_timestamp = models.DateTimeField(
         db_column="_timestamp", blank=True, null=True
@@ -280,6 +423,20 @@ class Incidents(models.Model):
     )
     test = models.ForeignKey(
         Tests, db_constraint=False, null=True, blank=True, on_delete=models.DO_NOTHING
+    )
+    build_run = models.ForeignKey(
+        BuildRuns,
+        db_constraint=False,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+    )
+    test_run = models.ForeignKey(
+        TestRuns,
+        db_constraint=False,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
     )
     present = models.BooleanField(blank=True, null=True)
     comment = models.TextField(blank=True, null=True)
