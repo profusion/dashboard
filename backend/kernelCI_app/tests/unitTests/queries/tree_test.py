@@ -108,6 +108,29 @@ class TestGetTreeListingDataByCheckoutId:
 
         assert result == expected_result
 
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.tree.dict_fetchall")
+    @patch("kernelCI_app.queries.tree.connection")
+    def test_get_tree_listing_data_by_checkout_id_runs_read_path(
+        self, mock_connection, mock_dict_fetchall
+    ):
+        expected_result = [{"id": "checkout_1", "tree_name": "mainline"}]
+        mock_dict_fetchall.return_value = expected_result
+        mock_cursor = setup_mock_cursor(mock_connection)
+
+        result = get_tree_listing_data_by_checkout_id(
+            checkout_ids=["checkout_1", "checkout_2"]
+        )
+
+        query = mock_cursor.execute.call_args.args[0]
+        params = mock_cursor.execute.call_args.args[1]
+        assert result == expected_result
+        assert "commits ON checkouts.commit_id = commits.id" in query
+        assert "build_runs AS builds" in query
+        assert "test_runs AS tests" in query
+        assert "test_definitions.path" in query
+        assert params == ["checkout_1", "checkout_2"]
+
 
 class TestGetTreeDetailsData:
     @patch("kernelCI_app.queries.tree.get_query_cache")

@@ -419,6 +419,11 @@ def get_tree_listing_data_by_checkout_id(*, checkout_ids: list[str]) -> list[dic
     if not checkout_ids:
         return []
 
+    if _use_runs_read_path():
+        return _get_tree_listing_data_by_checkout_id_from_runs(
+            checkout_ids=checkout_ids
+        )
+
     count_clauses = _get_tree_listing_count_clause()
 
     # TODO: check if those conditions of case, coalesce and group by are necessary
@@ -460,6 +465,64 @@ def get_tree_listing_data_by_checkout_id(*, checkout_ids: list[str]) -> list[dic
                 checkouts.git_repository_branch,
                 checkouts.git_repository_url,
                 checkouts.tree_name,
+                checkouts.origin_builds_finish_time,
+                checkouts.origin_tests_finish_time
+            """
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, checkout_ids)
+        return dict_fetchall(cursor=cursor)
+
+
+def _get_tree_listing_data_by_checkout_id_from_runs(
+    *, checkout_ids: list[str]
+) -> list[dict]:
+    count_clauses = _get_tree_listing_count_clause(
+        test_path_expression="test_definitions.path"
+    )
+
+    query = f"""
+            SELECT
+                MAX(checkouts.id) AS id,
+                commits.tree_name,
+                commits.git_repository_branch,
+                commits.git_repository_url,
+                commits.git_commit_hash,
+                checkouts.origin_builds_finish_time,
+                checkouts.origin_tests_finish_time,
+                CASE
+                    WHEN COUNT(DISTINCT commits.git_commit_tags) > 0 THEN
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT commits.git_commit_tags) FILTER (
+                            WHERE commits.git_commit_tags IS NOT NULL
+                            AND commits.git_commit_tags::TEXT <> '{"{}"}'
+                        ),
+                        ARRAY[]::TEXT[]
+                    )
+                    ELSE ARRAY[]::TEXT[]
+                END AS git_commit_tags,
+                MAX(commits.git_commit_name) AS git_commit_name,
+                MAX(checkouts.start_time) AS start_time,
+                {count_clauses}
+                checkouts.origin
+            FROM
+                checkouts
+            JOIN
+                commits ON checkouts.commit_id = commits.id
+            LEFT JOIN
+                build_runs AS builds ON builds.checkout_id = checkouts.id
+            LEFT JOIN
+                test_runs AS tests ON tests.build_run_id = builds.id
+            LEFT JOIN
+                test_definitions ON test_definitions.id = tests.test_definition_id
+            WHERE
+                checkouts.id IN ({", ".join(["%s"] * len(checkout_ids))})
+            GROUP BY
+                checkouts.origin,
+                commits.git_commit_hash,
+                commits.git_repository_branch,
+                commits.git_repository_url,
+                commits.tree_name,
                 checkouts.origin_builds_finish_time,
                 checkouts.origin_tests_finish_time
             """
