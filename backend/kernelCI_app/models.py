@@ -337,6 +337,9 @@ class Tests(models.Model):
 
 
 class TestDefinitions(models.Model):
+    # Disables automatic pytest test discovery for this class
+    __test__ = False
+
     field_timestamp = models.DateTimeField(
         db_column="_timestamp", blank=True, null=True
     )
@@ -366,6 +369,9 @@ class TestDefinitions(models.Model):
 
 
 class TestRuns(models.Model):
+    # Disables automatic pytest test discovery for this class
+    __test__ = False
+
     field_timestamp = models.DateTimeField(
         db_column="_timestamp", blank=True, null=True
     )

@@ -365,6 +365,8 @@ class TestMakeIncidentInstance(SimpleTestCase):
             "issue_version": 1,
             "build_id": "build",
             "test_id": "test",
+            "build_run_id": "build",
+            "test_run_id": "test",
             "present": True,
             "comment": "Test incident",
             "field_timestamp": MOCK_TIME,
@@ -381,10 +383,22 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
         "kernelCI_app.management.commands.helpers.process_submissions.make_checkout_instance"
     )
     @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_build_definition_instance_from_build"
+    )
+    @patch(
         "kernelCI_app.management.commands.helpers.process_submissions.make_build_instance"
     )
     @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_build_run_instance_from_build"
+    )
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_test_definition_instance_from_test"
+    )
+    @patch(
         "kernelCI_app.management.commands.helpers.process_submissions.make_test_instance"
+    )
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_test_run_instance_from_test"
     )
     @patch(
         "kernelCI_app.management.commands.helpers.process_submissions.make_incident_instance"
@@ -392,15 +406,23 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
     def test_build_instances_from_submission_with_all_types(
         self,
         mock_make_incident,
+        mock_make_test_run,
         mock_make_test,
+        mock_make_test_definition,
+        mock_make_build_run,
         mock_make_build,
+        mock_make_build_definition,
         mock_make_checkout,
         mock_make_issue,
     ):
         mock_make_issue.return_value = MagicMock()
         mock_make_checkout.return_value = MagicMock()
+        mock_make_build_definition.return_value = MagicMock()
         mock_make_build.return_value = MagicMock()
+        mock_make_build_run.return_value = MagicMock()
+        mock_make_test_definition.return_value = MagicMock()
         mock_make_test.return_value = MagicMock()
+        mock_make_test_run.return_value = MagicMock()
         mock_make_incident.return_value = MagicMock()
 
         submission_data = {
@@ -426,16 +448,24 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
             "commits": [],
             "issues": [mock_make_issue.return_value],
             "checkouts": [mock_make_checkout.return_value],
+            "build_definitions": [mock_make_build_definition.return_value],
             "builds": [mock_make_build.return_value],
+            "build_runs": [mock_make_build_run.return_value],
+            "test_definitions": [mock_make_test_definition.return_value],
             "tests": [mock_make_test.return_value],
+            "test_runs": [mock_make_test_run.return_value],
             "incidents": [mock_make_incident.return_value],
         }
         self.assertEqual(result, expected)
 
         mock_make_issue.assert_called_once()
         mock_make_checkout.assert_called_once()
+        mock_make_build_definition.assert_called_once()
         mock_make_build.assert_called_once()
+        mock_make_build_run.assert_called_once()
+        mock_make_test_definition.assert_called_once()
         mock_make_test.assert_called_once()
+        mock_make_test_run.assert_called_once()
         mock_make_incident.assert_called_once()
 
     def test_build_instances_from_submission_with_empty_data(self):
@@ -445,8 +475,12 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
             "commits": [],
             "issues": [],
             "checkouts": [],
+            "build_definitions": [],
             "builds": [],
+            "build_runs": [],
+            "test_definitions": [],
             "tests": [],
+            "test_runs": [],
             "incidents": [],
         }
         self.assertEqual(result, expected)

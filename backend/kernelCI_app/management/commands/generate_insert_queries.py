@@ -7,11 +7,18 @@ from jinja2 import Template
 from kernelCI_app.typeModels.modelTypes import MODEL_MAP
 
 CONFLICT_TARGETS = {
+    "build_definitions": ("checkout_id", "series"),
     "commits": (
         "tree_name",
         "git_repository_url",
         "git_repository_branch",
         "git_commit_hash",
+    ),
+    "test_definitions": (
+        "build_definition_id",
+        "path",
+        "number_prefix",
+        "number_unit",
     ),
 }
 
@@ -101,8 +108,12 @@ class Command(BaseCommand):
             commits=var_insert_queries["commits"],
             checkouts=var_insert_queries["checkouts"],
             issues=var_insert_queries["issues"],
+            build_definitions=var_insert_queries["build_definitions"],
             builds=var_insert_queries["builds"],
+            build_runs=var_insert_queries["build_runs"],
+            test_definitions=var_insert_queries["test_definitions"],
             tests=var_insert_queries["tests"],
+            test_runs=var_insert_queries["test_runs"],
             incidents=var_insert_queries["incidents"],
         )
 

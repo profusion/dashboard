@@ -645,8 +645,12 @@ class TestFlushBuffers:
         expected_calls = [
             call(issues_buf, "issues"),
             call(checkouts_buf, "checkouts"),
+            call([], "build_definitions"),
             call(builds_buf, "builds"),
+            call([], "build_runs"),
+            call([], "test_definitions"),
             call(tests_buf, "tests"),
+            call([], "test_runs"),
             call(incidents_buf, "incidents"),
         ]
         mock_consume.assert_has_calls(expected_calls)
@@ -659,15 +663,20 @@ class TestFlushBuffers:
         # So we check against the len of the original buffers
         mock_out.assert_called_once_with(
             "Flushed batch in %.3fs (%.1f items/s): "
-            "commits=%d issues=%d checkouts=%d builds=%d tests=%d incidents=%d"
+            "commits=%d issues=%d checkouts=%d build_definitions=%d builds=%d "
+            "build_runs=%d test_definitions=%d tests=%d test_runs=%d incidents=%d"
             % (
                 1,
                 total_items,
                 0,
                 n_issues,
                 n_checkouts,
+                0,
                 n_builds,
+                0,
+                0,
                 n_tests,
+                0,
                 n_incidents,
             )
         )
@@ -757,15 +766,20 @@ class TestFlushBuffers:
                 call("Moved %s files to pending retry directory" % n_files),
                 call(
                     "Flushed batch in %.3fs (%.1f items/s): "
-                    "commits=%d issues=%d checkouts=%d builds=%d tests=%d incidents=%d"
+                    "commits=%d issues=%d checkouts=%d build_definitions=%d builds=%d "
+                    "build_runs=%d test_definitions=%d tests=%d test_runs=%d incidents=%d"
                     % (
                         1,
                         total_items,
                         0,
                         n_issues,
                         n_checkouts,
+                        0,
                         n_builds,
+                        0,
+                        0,
                         n_tests,
+                        0,
                         n_incidents,
                     )
                 ),

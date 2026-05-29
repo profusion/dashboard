@@ -41,7 +41,18 @@ from kernelCI_app.management.commands.helpers.process_submissions import (
     TableNames,
     build_instances_from_submission,
 )
-from kernelCI_app.models import Builds, Checkouts, Commits, Incidents, Issues, Tests
+from kernelCI_app.models import (
+    BuildDefinitions,
+    BuildRuns,
+    Builds,
+    Checkouts,
+    Commits,
+    Incidents,
+    Issues,
+    TestDefinitions,
+    TestRuns,
+    Tests,
+)
 from kernelCI_app.typeModels.modelTypes import TableModels
 
 type INGESTER_DIRS = Literal["archive", "failed", "pending_retry"]
@@ -272,13 +283,108 @@ def assign_commit_ids(checkouts_buf: list[Checkouts]) -> None:
             checkout.commit_id = commit_ids_by_key.get(key)
 
 
+def assign_build_definition_ids(build_runs_buf: list[BuildRuns]) -> None:
+    """Resolve build_run.build_definition_id after definitions are upserted."""
+    build_keys = {
+        (build_run.checkout_id, getattr(build_run, "_definition_series", None))
+        for build_run in build_runs_buf
+        if build_run.checkout_id and getattr(build_run, "_definition_series", None)
+    }
+    checkout_ids = {key[0] for key in build_keys}
+    series_values = {key[1] for key in build_keys}
+    if not checkout_ids or not series_values:
+        return
+
+    rows = BuildDefinitions.objects.filter(
+        checkout_id__in=checkout_ids,
+        series__in=series_values,
+    ).values_list("id", "checkout_id", "series")
+    definition_ids_by_key = {
+        (checkout_id, series): id for id, checkout_id, series in rows
+    }
+
+    for build_run in build_runs_buf:
+        build_run.build_definition_id = definition_ids_by_key.get(
+            (build_run.checkout_id, getattr(build_run, "_definition_series", None))
+        )
+
+
+def assign_test_build_definition_ids(
+    test_definitions_buf: list[TestDefinitions],
+    test_runs_buf: list[TestRuns],
+) -> None:
+    """Resolve test_definition.build_definition_id from the linked build run."""
+    build_run_ids = {
+        test_run.build_run_id for test_run in test_runs_buf if test_run.build_run_id
+    }
+    build_run_ids.update(
+        getattr(test_definition, "_legacy_build_id", None)
+        for test_definition in test_definitions_buf
+        if getattr(test_definition, "_legacy_build_id", None)
+    )
+    if not build_run_ids:
+        return
+
+    rows = BuildRuns.objects.filter(id__in=build_run_ids).values_list(
+        "id", "build_definition_id"
+    )
+    build_definition_id_by_build_run = dict(rows)
+
+    for test_definition in test_definitions_buf:
+        legacy_build_id = getattr(test_definition, "_legacy_build_id", None)
+        test_definition.build_definition_id = build_definition_id_by_build_run.get(
+            legacy_build_id
+        )
+
+
+def assign_test_definition_ids(test_runs_buf: list[TestRuns]) -> None:
+    """Resolve test_run.test_definition_id after test definitions are upserted."""
+    build_run_ids = {
+        test_run.build_run_id for test_run in test_runs_buf if test_run.build_run_id
+    }
+    if not build_run_ids:
+        return
+
+    build_rows = BuildRuns.objects.filter(id__in=build_run_ids).values_list(
+        "id", "build_definition_id"
+    )
+    build_definition_id_by_build_run = dict(build_rows)
+    build_definition_ids = set(build_definition_id_by_build_run.values())
+    if not build_definition_ids:
+        return
+
+    rows = TestDefinitions.objects.filter(
+        build_definition_id__in=build_definition_ids,
+    ).values_list("id", "build_definition_id", "path", "number_prefix", "number_unit")
+    definition_ids_by_key = {
+        (build_definition_id, path, number_prefix, number_unit): id
+        for id, build_definition_id, path, number_prefix, number_unit in rows
+    }
+
+    for test_run in test_runs_buf:
+        build_definition_id = build_definition_id_by_build_run.get(
+            test_run.build_run_id
+        )
+        key = (
+            build_definition_id,
+            getattr(test_run, "_definition_path", None),
+            getattr(test_run, "_definition_number_prefix", None),
+            getattr(test_run, "_definition_number_unit", None),
+        )
+        test_run.test_definition_id = definition_ids_by_key.get(key)
+
+
 def flush_buffers(
     *,
     commits_buf: list[Commits] | None = None,
     issues_buf: list[Issues],
     checkouts_buf: list[Checkouts],
+    build_definitions_buf: list[BuildDefinitions] | None = None,
     builds_buf: list[Builds],
+    build_runs_buf: list[BuildRuns] | None = None,
+    test_definitions_buf: list[TestDefinitions] | None = None,
     tests_buf: list[Tests],
+    test_runs_buf: list[TestRuns] | None = None,
     incidents_buf: list[Incidents],
     buffer_files: set[tuple[str, str]],
     dirs: dict[INGESTER_DIRS, str],
@@ -291,13 +397,25 @@ def flush_buffers(
     """
     if commits_buf is None:
         commits_buf = []
+    if build_definitions_buf is None:
+        build_definitions_buf = []
+    if build_runs_buf is None:
+        build_runs_buf = []
+    if test_definitions_buf is None:
+        test_definitions_buf = []
+    if test_runs_buf is None:
+        test_runs_buf = []
 
     total = (
         len(commits_buf)
         + len(issues_buf)
         + len(checkouts_buf)
+        + len(build_definitions_buf)
         + len(builds_buf)
+        + len(build_runs_buf)
+        + len(test_definitions_buf)
         + len(tests_buf)
+        + len(test_runs_buf)
         + len(incidents_buf)
     )
 
@@ -314,8 +432,15 @@ def flush_buffers(
             assign_commit_ids(checkouts_buf)
             consume_buffer(issues_buf, "issues")
             consume_buffer(checkouts_buf, "checkouts")
+            consume_buffer(build_definitions_buf, "build_definitions")
+            assign_build_definition_ids(build_runs_buf)
             consume_buffer(builds_buf, "builds")
+            consume_buffer(build_runs_buf, "build_runs")
+            assign_test_build_definition_ids(test_definitions_buf, test_runs_buf)
+            consume_buffer(test_definitions_buf, "test_definitions")
+            assign_test_definition_ids(test_runs_buf)
             consume_buffer(tests_buf, "tests")
+            consume_buffer(test_runs_buf, "test_runs")
             consume_buffer(incidents_buf, "incidents")
             aggregate_checkouts_and_pendings(
                 checkouts_instances=checkouts_buf,
@@ -343,15 +468,20 @@ def flush_buffers(
         rate = total / flush_dur if flush_dur > 0 else 0.0
         msg = (
             "Flushed batch in %.3fs (%.1f items/s): "
-            "commits=%d issues=%d checkouts=%d builds=%d tests=%d incidents=%d"
+            "commits=%d issues=%d checkouts=%d build_definitions=%d builds=%d "
+            "build_runs=%d test_definitions=%d tests=%d test_runs=%d incidents=%d"
             % (
                 flush_dur,
                 rate,
                 len(commits_buf),
                 len(issues_buf),
                 len(checkouts_buf),
+                len(build_definitions_buf),
                 len(builds_buf),
+                len(build_runs_buf),
+                len(test_definitions_buf),
                 len(tests_buf),
+                len(test_runs_buf),
                 len(incidents_buf),
             )
         )
@@ -359,8 +489,12 @@ def flush_buffers(
         commits_buf.clear()
         issues_buf.clear()
         checkouts_buf.clear()
+        build_definitions_buf.clear()
         builds_buf.clear()
+        build_runs_buf.clear()
+        test_definitions_buf.clear()
         tests_buf.clear()
+        test_runs_buf.clear()
         incidents_buf.clear()
         buffer_files.clear()
 
@@ -378,8 +512,12 @@ class SubmissionsInstances(TypedDict):
     commits: list[Commits]
     issues: list[Issues]
     checkouts: list[Checkouts]
+    build_definitions: list[BuildDefinitions]
     builds: list[Builds]
+    build_runs: list[BuildRuns]
+    test_definitions: list[TestDefinitions]
     tests: list[Tests]
+    test_runs: list[TestRuns]
     incidents: list[Incidents]
 
 
@@ -399,8 +537,12 @@ def process_batch(
         "commits": [],
         "issues": [],
         "checkouts": [],
+        "build_definitions": [],
         "builds": [],
+        "build_runs": [],
+        "test_definitions": [],
         "tests": [],
+        "test_runs": [],
         "incidents": [],
     }
 
@@ -447,8 +589,12 @@ def process_batch(
             instances_dict["commits"].extend(instances["commits"])
             instances_dict["issues"].extend(instances["issues"])
             instances_dict["checkouts"].extend(instances["checkouts"])
+            instances_dict["build_definitions"].extend(instances["build_definitions"])
             instances_dict["builds"].extend(instances["builds"])
+            instances_dict["build_runs"].extend(instances["build_runs"])
+            instances_dict["test_definitions"].extend(instances["test_definitions"])
             instances_dict["tests"].extend(instances["tests"])
+            instances_dict["test_runs"].extend(instances["test_runs"])
             instances_dict["incidents"].extend(instances["incidents"])
 
             buffer_files.add((file["name"], file["path"]))
@@ -464,8 +610,21 @@ def process_batch(
         )
         instances_dict["issues"].sort(key=lambda x: x.id)
         instances_dict["checkouts"].sort(key=lambda x: x.id)
+        instances_dict["build_definitions"].sort(
+            key=lambda x: (x.checkout_id, x.series)
+        )
         instances_dict["builds"].sort(key=lambda x: x.id)
+        instances_dict["build_runs"].sort(key=lambda x: x.id)
+        instances_dict["test_definitions"].sort(
+            key=lambda x: (
+                getattr(x, "_legacy_build_id", "") or "",
+                x.path or "",
+                x.number_prefix or "",
+                x.number_unit or "",
+            )
+        )
         instances_dict["tests"].sort(key=lambda x: x.id)
+        instances_dict["test_runs"].sort(key=lambda x: x.id)
         instances_dict["incidents"].sort(key=lambda x: x.id)
 
         should_flush_checkouts = len(instances_dict["checkouts"]) >= INGEST_BATCH_SIZE
@@ -484,14 +643,34 @@ def process_batch(
             checkouts_buf=(
                 instances_dict["checkouts"] if should_flush_checkouts else []
             ),
+            build_definitions_buf=(
+                instances_dict["build_definitions"]
+                if len(instances_dict["build_definitions"]) >= INGEST_BATCH_SIZE
+                else []
+            ),
             builds_buf=(
                 instances_dict["builds"]
                 if len(instances_dict["builds"]) >= INGEST_BATCH_SIZE
                 else []
             ),
+            build_runs_buf=(
+                instances_dict["build_runs"]
+                if len(instances_dict["build_runs"]) >= INGEST_BATCH_SIZE
+                else []
+            ),
+            test_definitions_buf=(
+                instances_dict["test_definitions"]
+                if len(instances_dict["test_definitions"]) >= INGEST_BATCH_SIZE
+                else []
+            ),
             tests_buf=(
                 instances_dict["tests"]
                 if len(instances_dict["tests"]) >= INGEST_BATCH_SIZE
+                else []
+            ),
+            test_runs_buf=(
+                instances_dict["test_runs"]
+                if len(instances_dict["test_runs"]) >= INGEST_BATCH_SIZE
                 else []
             ),
             incidents_buf=(
@@ -512,8 +691,12 @@ def process_batch(
             commits_buf=instances_dict["commits"],
             issues_buf=instances_dict["issues"],
             checkouts_buf=instances_dict["checkouts"],
+            build_definitions_buf=instances_dict["build_definitions"],
             builds_buf=instances_dict["builds"],
+            build_runs_buf=instances_dict["build_runs"],
+            test_definitions_buf=instances_dict["test_definitions"],
             tests_buf=instances_dict["tests"],
+            test_runs_buf=instances_dict["test_runs"],
             incidents_buf=instances_dict["incidents"],
             buffer_files=buffer_files,
             dirs=dirs,

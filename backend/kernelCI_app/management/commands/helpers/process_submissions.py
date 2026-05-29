@@ -7,7 +7,18 @@ from prometheus_client import Counter
 from pydantic import ValidationError
 
 from kernelCI_app.constants.ingester import INGESTER_GRAFANA_LABEL
-from kernelCI_app.models import Builds, Checkouts, Commits, Incidents, Issues, Tests
+from kernelCI_app.models import (
+    BuildDefinitions,
+    BuildRuns,
+    Builds,
+    Checkouts,
+    Commits,
+    Incidents,
+    Issues,
+    TestDefinitions,
+    TestRuns,
+    Tests,
+)
 from kernelCI_app.typeModels.modelTypes import TableNames
 
 
@@ -18,8 +29,12 @@ class ProcessedSubmission(TypedDict):
     commits: list[Commits]
     issues: list[Issues]
     checkouts: list[Checkouts]
+    build_definitions: list[BuildDefinitions]
     builds: list[Builds]
+    build_runs: list[BuildRuns]
+    test_definitions: list[TestDefinitions]
     tests: list[Tests]
+    test_runs: list[TestRuns]
     incidents: list[Incidents]
 
 
@@ -43,8 +58,12 @@ def get_model_fields(model_fields) -> set[str]:
 ISSUE_FIELDS = get_model_fields(Issues._meta.get_fields())
 CHECKOUT_FIELDS = get_model_fields(Checkouts._meta.get_fields())
 COMMIT_FIELDS = get_model_fields(Commits._meta.get_fields()) - {"id"}
+BUILD_DEFINITION_FIELDS = get_model_fields(BuildDefinitions._meta.get_fields()) - {"id"}
 BUILD_FIELDS = get_model_fields(Builds._meta.get_fields())
+BUILD_RUN_FIELDS = get_model_fields(BuildRuns._meta.get_fields())
+TEST_DEFINITION_FIELDS = get_model_fields(TestDefinitions._meta.get_fields()) - {"id"}
 TEST_FIELDS = get_model_fields(Tests._meta.get_fields())
+TEST_RUN_FIELDS = get_model_fields(TestRuns._meta.get_fields())
 INCIDENT_FIELDS = get_model_fields(Incidents._meta.get_fields())
 
 
@@ -140,6 +159,27 @@ def make_build_instance(build: dict[str, Any]) -> Builds:
     return obj
 
 
+def make_build_definition_instance_from_build(
+    build: dict[str, Any],
+) -> BuildDefinitions:
+    filtered_build_definition = {
+        key: value for key, value in build.items() if key in BUILD_DEFINITION_FIELDS
+    }
+    obj = BuildDefinitions(**filtered_build_definition)
+    obj.field_timestamp = timezone.now()
+    return obj
+
+
+def make_build_run_instance_from_build(build: dict[str, Any]) -> BuildRuns:
+    filtered_build_run = {
+        key: value for key, value in build.items() if key in BUILD_RUN_FIELDS
+    }
+    obj = BuildRuns(**filtered_build_run)
+    obj._definition_series = build.get("series")
+    obj.field_timestamp = timezone.now()
+    return obj
+
+
 def make_test_instance(test: dict[str, Any]) -> Tests:
     flattened_test = flatten_dict_specific(test, ["environment", "number"])
     filtered_test = {
@@ -150,9 +190,40 @@ def make_test_instance(test: dict[str, Any]) -> Tests:
     return obj
 
 
+def make_test_definition_instance_from_test(test: dict[str, Any]) -> TestDefinitions:
+    flattened_test = flatten_dict_specific(test, ["environment", "number"])
+    filtered_test_definition = {
+        key: value
+        for key, value in flattened_test.items()
+        if key in TEST_DEFINITION_FIELDS
+    }
+    obj = TestDefinitions(**filtered_test_definition)
+    obj._legacy_build_id = flattened_test.get("build_id")
+    obj.field_timestamp = timezone.now()
+    return obj
+
+
+def make_test_run_instance_from_test(test: dict[str, Any]) -> TestRuns:
+    flattened_test = flatten_dict_specific(test, ["environment", "number"])
+    test_run_data = flattened_test | {"build_run_id": flattened_test.get("build_id")}
+    filtered_test_run = {
+        key: value for key, value in test_run_data.items() if key in TEST_RUN_FIELDS
+    }
+    obj = TestRuns(**filtered_test_run)
+    obj._definition_path = flattened_test.get("path")
+    obj._definition_number_prefix = flattened_test.get("number_prefix")
+    obj._definition_number_unit = flattened_test.get("number_unit")
+    obj.field_timestamp = timezone.now()
+    return obj
+
+
 def make_incident_instance(incident: dict[str, Any]) -> Incidents:
+    incident_data = incident | {
+        "build_run_id": incident.get("build_id"),
+        "test_run_id": incident.get("test_id"),
+    }
     filtered_incident = {
-        key: value for key, value in incident.items() if key in INCIDENT_FIELDS
+        key: value for key, value in incident_data.items() if key in INCIDENT_FIELDS
     }
     obj = Incidents(**filtered_incident)
     obj.field_timestamp = timezone.now()
@@ -176,8 +247,12 @@ def build_instances_from_submission(
         "commits": [],
         "issues": [],
         "checkouts": [],
+        "build_definitions": [],
         "builds": [],
+        "build_runs": [],
+        "test_definitions": [],
         "tests": [],
+        "test_runs": [],
         "incidents": [],
     }
     if commit_enrichments is None:
@@ -214,8 +289,16 @@ def build_instances_from_submission(
                             ingester=INGESTER_GRAFANA_LABEL, origin=checkout.origin
                         ).inc()
                     case "builds":
+                        build_definition = make_build_definition_instance_from_build(
+                            item
+                        )
+                        out["build_definitions"].append(build_definition)
+
                         build = make_build_instance(item)
                         out["builds"].append(build)
+
+                        build_run = make_build_run_instance_from_build(item)
+                        out["build_runs"].append(build_run)
 
                         try:
                             misc = build.misc
@@ -229,8 +312,14 @@ def build_instances_from_submission(
                             lab=lab,
                         ).inc()
                     case "tests":
+                        test_definition = make_test_definition_instance_from_test(item)
+                        out["test_definitions"].append(test_definition)
+
                         test = make_test_instance(item)
                         out["tests"].append(test)
+
+                        test_run = make_test_run_instance_from_test(item)
+                        out["test_runs"].append(test_run)
 
                         try:
                             misc = test.misc
