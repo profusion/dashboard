@@ -149,24 +149,22 @@ class Command(BaseCommand):
             cursor.execute(
                 """
                 UPDATE incidents
-                SET build_run_id = build_id
+                SET build_run_id = build_runs.id
+                FROM build_runs
                 WHERE build_id IS NOT NULL
                     AND build_run_id IS NULL
-                    AND EXISTS (
-                        SELECT 1 FROM build_runs WHERE build_runs.id = incidents.build_id
-                    )
+                    AND build_runs.kci_id = incidents.build_id
                 """
             )
             build_count = cursor.rowcount
             cursor.execute(
                 """
                 UPDATE incidents
-                SET test_run_id = test_id
+                SET test_run_id = test_runs.id
+                FROM test_runs
                 WHERE test_id IS NOT NULL
                     AND test_run_id IS NULL
-                    AND EXISTS (
-                        SELECT 1 FROM test_runs WHERE test_runs.id = incidents.test_id
-                    )
+                    AND test_runs.kci_id = incidents.test_id
                 """
             )
             test_count = cursor.rowcount
@@ -188,12 +186,21 @@ class Command(BaseCommand):
             "builds": "build_runs",
             "tests": "test_runs",
         }[table_name]
+        run_id_column = "kci_id"
+        eligible_clause = ""
+        if table_name == "tests":
+            eligible_clause = """
+                AND EXISTS (
+                    SELECT 1 FROM build_runs
+                    WHERE build_runs.kci_id = tests.build_id
+                )
+            """
         missing_clause = ""
         if missing_only:
             missing_clause = f"""
                 AND NOT EXISTS (
                     SELECT 1 FROM {run_table_name}
-                    WHERE {run_table_name}.id = {table_name}.id
+                    WHERE {run_table_name}.{run_id_column} = {table_name}.id
                 )
             """
 
@@ -203,6 +210,7 @@ class Command(BaseCommand):
                 SELECT id
                 FROM {table_name}
                 WHERE id > %s
+                {eligible_clause}
                 {missing_clause}
                 ORDER BY id
                 LIMIT %s
@@ -276,7 +284,7 @@ class Command(BaseCommand):
                 """
                 INSERT INTO build_runs (
                     _timestamp,
-                    id,
+                    kci_id,
                     build_definition_id,
                     checkout_id,
                     origin,
@@ -314,7 +322,7 @@ class Command(BaseCommand):
                     ON build_definitions.checkout_id = builds.checkout_id
                     AND build_definitions.series = builds.series
                 WHERE builds.id = ANY(%s)
-                ON CONFLICT (id)
+                ON CONFLICT (kci_id)
                 DO UPDATE SET
                     _timestamp = GREATEST(build_runs._timestamp, EXCLUDED._timestamp),
                     build_definition_id = COALESCE(
@@ -351,7 +359,7 @@ class Command(BaseCommand):
                 WITH selected_tests AS (
                     SELECT tests.*, build_runs.build_definition_id
                     FROM tests
-                    JOIN build_runs ON build_runs.id = tests.build_id
+                    JOIN build_runs ON build_runs.kci_id = tests.build_id
                     WHERE tests.id = ANY(%s)
                 ),
                 latest_definitions AS (
@@ -404,12 +412,13 @@ class Command(BaseCommand):
                 """
                 INSERT INTO test_runs (
                     _timestamp,
-                    id,
+                    kci_id,
                     test_definition_id,
                     build_run_id,
                     origin,
                     environment_comment,
                     environment_misc,
+                    platform,
                     comment,
                     log_url,
                     log_excerpt,
@@ -420,16 +429,18 @@ class Command(BaseCommand):
                     output_files,
                     misc,
                     number_value,
-                    environment_compatible
+                    environment_compatible,
+                    is_boot
                 )
                 SELECT
                     tests._timestamp,
                     tests.id,
                     test_definitions.id,
-                    tests.build_id,
+                    build_runs.id,
                     tests.origin,
                     tests.environment_comment,
                     tests.environment_misc,
+                    tests.environment_misc ->> 'platform',
                     tests.comment,
                     tests.log_url,
                     tests.log_excerpt,
@@ -440,9 +451,14 @@ class Command(BaseCommand):
                     tests.output_files,
                     tests.misc,
                     tests.number_value,
-                    tests.environment_compatible
+                    tests.environment_compatible,
+                    CASE
+                        WHEN tests.path = 'boot' OR tests.path LIKE 'boot.%%' THEN TRUE
+                        WHEN tests.path IS NULL THEN NULL
+                        ELSE FALSE
+                    END
                 FROM tests
-                JOIN build_runs ON build_runs.id = tests.build_id
+                JOIN build_runs ON build_runs.kci_id = tests.build_id
                 JOIN test_definitions
                     ON test_definitions.build_definition_id =
                         build_runs.build_definition_id
@@ -452,7 +468,7 @@ class Command(BaseCommand):
                     AND test_definitions.number_unit IS NOT DISTINCT FROM
                         tests.number_unit
                 WHERE tests.id = ANY(%s)
-                ON CONFLICT (id)
+                ON CONFLICT (kci_id)
                 DO UPDATE SET
                     _timestamp = GREATEST(test_runs._timestamp, EXCLUDED._timestamp),
                     test_definition_id = COALESCE(
@@ -469,6 +485,7 @@ class Command(BaseCommand):
                         test_runs.environment_misc,
                         EXCLUDED.environment_misc
                     ),
+                    platform = COALESCE(test_runs.platform, EXCLUDED.platform),
                     comment = COALESCE(test_runs.comment, EXCLUDED.comment),
                     log_url = COALESCE(test_runs.log_url, EXCLUDED.log_url),
                     log_excerpt = COALESCE(
@@ -485,7 +502,8 @@ class Command(BaseCommand):
                     environment_compatible = COALESCE(
                         test_runs.environment_compatible,
                         EXCLUDED.environment_compatible
-                    )
+                    ),
+                    is_boot = COALESCE(test_runs.is_boot, EXCLUDED.is_boot)
                 """,
                 [test_ids],
             )

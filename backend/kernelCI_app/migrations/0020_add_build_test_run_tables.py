@@ -18,12 +18,7 @@ class Migration(migrations.Migration):
             fields=[
                 (
                     "id",
-                    models.BigAutoField(
-                        auto_created=True,
-                        primary_key=True,
-                        serialize=False,
-                        verbose_name="ID",
-                    ),
+                    models.AutoField(primary_key=True, serialize=False),
                 ),
                 (
                     "field_timestamp",
@@ -51,10 +46,14 @@ class Migration(migrations.Migration):
             name="BuildRuns",
             fields=[
                 (
+                    "id",
+                    models.BigAutoField(primary_key=True, serialize=False),
+                ),
+                (
                     "field_timestamp",
                     models.DateTimeField(blank=True, db_column="_timestamp", null=True),
                 ),
-                ("id", models.TextField(primary_key=True, serialize=False)),
+                ("kci_id", models.TextField(unique=True)),
                 ("origin", models.TextField()),
                 ("comment", models.TextField(blank=True, null=True)),
                 ("start_time", models.DateTimeField(blank=True, null=True)),
@@ -122,12 +121,7 @@ class Migration(migrations.Migration):
             fields=[
                 (
                     "id",
-                    models.BigAutoField(
-                        auto_created=True,
-                        primary_key=True,
-                        serialize=False,
-                        verbose_name="ID",
-                    ),
+                    models.AutoField(primary_key=True, serialize=False),
                 ),
                 (
                     "field_timestamp",
@@ -161,13 +155,18 @@ class Migration(migrations.Migration):
             name="TestRuns",
             fields=[
                 (
+                    "id",
+                    models.BigAutoField(primary_key=True, serialize=False),
+                ),
+                (
                     "field_timestamp",
                     models.DateTimeField(blank=True, db_column="_timestamp", null=True),
                 ),
-                ("id", models.TextField(primary_key=True, serialize=False)),
+                ("kci_id", models.TextField(unique=True)),
                 ("origin", models.TextField()),
                 ("environment_comment", models.TextField(blank=True, null=True)),
                 ("environment_misc", models.JSONField(blank=True, null=True)),
+                ("platform", models.TextField(blank=True, null=True)),
                 ("comment", models.TextField(blank=True, null=True)),
                 ("log_url", models.TextField(blank=True, null=True)),
                 (
@@ -202,6 +201,7 @@ class Migration(migrations.Migration):
                         base_field=models.TextField(), blank=True, null=True, size=None
                     ),
                 ),
+                ("is_boot", models.BooleanField(blank=True, null=True)),
                 (
                     "build_run",
                     models.ForeignKey(
@@ -330,11 +330,20 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name="testruns",
+            index=models.Index(fields=["platform"], name="test_runs_platform"),
+        ),
+        migrations.AddIndex(
+            model_name="testruns",
             index=models.Index(
-                django.db.models.expressions.RawSQL(
-                    "(environment_misc ->> 'platform')", []
-                ),
-                name="test_runs_platform_idx",
+                fields=["origin", "platform", "start_time"],
+                name="test_runs_origin_platform_time",
+            ),
+        ),
+        migrations.AddIndex(
+            model_name="testruns",
+            index=models.Index(
+                fields=["build_run", "origin", "platform", "start_time"],
+                name="test_runs_bld_org_plat_time",
             ),
         ),
         migrations.AddIndex(

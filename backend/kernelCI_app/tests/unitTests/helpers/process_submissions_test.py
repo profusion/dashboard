@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from django.db import IntegrityError
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from django.utils import timezone
 from pydantic import ValidationError
 
@@ -365,8 +365,6 @@ class TestMakeIncidentInstance(SimpleTestCase):
             "issue_version": 1,
             "build_id": "build",
             "test_id": "test",
-            "build_run_id": "build",
-            "test_run_id": "test",
             "present": True,
             "comment": "Test incident",
             "field_timestamp": MOCK_TIME,
@@ -403,6 +401,7 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
     @patch(
         "kernelCI_app.management.commands.helpers.process_submissions.make_incident_instance"
     )
+    @override_settings(DB_SCHEMA_REFACTOR_DUAL_WRITE=True)
     def test_build_instances_from_submission_with_all_types(
         self,
         mock_make_incident,
@@ -467,6 +466,84 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
         mock_make_test.assert_called_once()
         mock_make_test_run.assert_called_once()
         mock_make_incident.assert_called_once()
+
+    @override_settings(DB_SCHEMA_REFACTOR_DUAL_WRITE=False)
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_issue_instance"
+    )
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_checkout_instance"
+    )
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_build_definition_instance_from_build"
+    )
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_build_instance"
+    )
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_build_run_instance_from_build"
+    )
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_test_definition_instance_from_test"
+    )
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_test_instance"
+    )
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_test_run_instance_from_test"
+    )
+    @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_incident_instance"
+    )
+    def test_build_instances_from_submission_with_dual_write_disabled(
+        self,
+        mock_make_incident,
+        mock_make_test_run,
+        mock_make_test,
+        mock_make_test_definition,
+        mock_make_build_run,
+        mock_make_build,
+        mock_make_build_definition,
+        mock_make_checkout,
+        mock_make_issue,
+    ):
+        mock_make_issue.return_value = MagicMock()
+        mock_make_checkout.return_value = MagicMock()
+        mock_make_build.return_value = MagicMock()
+        mock_make_test.return_value = MagicMock()
+        mock_make_incident.return_value = MagicMock()
+
+        submission_data = {
+            "issues": [{"id": "issue", "version": 1, "origin": "test"}],
+            "checkouts": [{"id": "checkout", "origin": "test"}],
+            "builds": [{"id": "build", "origin": "test", "checkout_id": "checkout"}],
+            "tests": [{"id": "test", "origin": "test", "build_id": "build"}],
+            "incidents": [
+                {
+                    "id": "incident",
+                    "origin": "test",
+                    "issue_id": "issue",
+                    "issue_version": 1,
+                }
+            ],
+        }
+
+        result = build_instances_from_submission(
+            submission_data, MAP_TABLENAMES_TO_COUNTER
+        )
+
+        self.assertEqual(result["build_definitions"], [])
+        self.assertEqual(result["build_runs"], [])
+        self.assertEqual(result["test_definitions"], [])
+        self.assertEqual(result["test_runs"], [])
+        self.assertEqual(result["builds"], [mock_make_build.return_value])
+        self.assertEqual(result["tests"], [mock_make_test.return_value])
+        self.assertEqual(result["incidents"], [mock_make_incident.return_value])
+
+        mock_make_build_definition.assert_not_called()
+        mock_make_build_run.assert_not_called()
+        mock_make_test_definition.assert_not_called()
+        mock_make_test_run.assert_not_called()
 
     def test_build_instances_from_submission_with_empty_data(self):
         result = build_instances_from_submission({}, MAP_TABLENAMES_TO_COUNTER)

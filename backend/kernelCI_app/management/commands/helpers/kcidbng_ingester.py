@@ -314,19 +314,21 @@ def assign_test_build_definition_ids(
     test_runs_buf: list[TestRuns],
 ) -> None:
     """Resolve test_definition.build_definition_id from the linked build run."""
-    build_run_ids = {
-        test_run.build_run_id for test_run in test_runs_buf if test_run.build_run_id
+    build_run_kci_ids = {
+        getattr(test_run, "_legacy_build_id", None)
+        for test_run in test_runs_buf
+        if getattr(test_run, "_legacy_build_id", None)
     }
-    build_run_ids.update(
+    build_run_kci_ids.update(
         getattr(test_definition, "_legacy_build_id", None)
         for test_definition in test_definitions_buf
         if getattr(test_definition, "_legacy_build_id", None)
     )
-    if not build_run_ids:
+    if not build_run_kci_ids:
         return
 
-    rows = BuildRuns.objects.filter(id__in=build_run_ids).values_list(
-        "id", "build_definition_id"
+    rows = BuildRuns.objects.filter(kci_id__in=build_run_kci_ids).values_list(
+        "kci_id", "build_definition_id"
     )
     build_definition_id_by_build_run = dict(rows)
 
@@ -339,17 +341,24 @@ def assign_test_build_definition_ids(
 
 def assign_test_definition_ids(test_runs_buf: list[TestRuns]) -> None:
     """Resolve test_run.test_definition_id after test definitions are upserted."""
-    build_run_ids = {
-        test_run.build_run_id for test_run in test_runs_buf if test_run.build_run_id
+    build_run_kci_ids = {
+        getattr(test_run, "_legacy_build_id", None)
+        for test_run in test_runs_buf
+        if getattr(test_run, "_legacy_build_id", None)
     }
-    if not build_run_ids:
+    if not build_run_kci_ids:
         return
 
-    build_rows = BuildRuns.objects.filter(id__in=build_run_ids).values_list(
-        "id", "build_definition_id"
+    build_rows = BuildRuns.objects.filter(kci_id__in=build_run_kci_ids).values_list(
+        "kci_id", "id", "build_definition_id"
     )
-    build_definition_id_by_build_run = dict(build_rows)
-    build_definition_ids = set(build_definition_id_by_build_run.values())
+    build_run_by_kci_id = {
+        kci_id: (id, build_definition_id)
+        for kci_id, id, build_definition_id in build_rows
+    }
+    build_definition_ids = {
+        build_definition_id for _, build_definition_id in build_run_by_kci_id.values()
+    }
     if not build_definition_ids:
         return
 
@@ -362,9 +371,11 @@ def assign_test_definition_ids(test_runs_buf: list[TestRuns]) -> None:
     }
 
     for test_run in test_runs_buf:
-        build_definition_id = build_definition_id_by_build_run.get(
-            test_run.build_run_id
-        )
+        build_run = build_run_by_kci_id.get(getattr(test_run, "_legacy_build_id", None))
+        if build_run is None:
+            continue
+        build_run_id, build_definition_id = build_run
+        test_run.build_run_id = build_run_id
         key = (
             build_definition_id,
             getattr(test_run, "_definition_path", None),
@@ -372,6 +383,27 @@ def assign_test_definition_ids(test_runs_buf: list[TestRuns]) -> None:
             getattr(test_run, "_definition_number_unit", None),
         )
         test_run.test_definition_id = definition_ids_by_key.get(key)
+
+
+def assign_incident_run_ids(incidents_buf: list[Incidents]) -> None:
+    """Resolve incident run FKs from legacy KCIDB ids."""
+    build_kci_ids = {
+        incident.build_id for incident in incidents_buf if incident.build_id
+    }
+    test_kci_ids = {incident.test_id for incident in incidents_buf if incident.test_id}
+
+    build_run_ids_by_kci_id = dict(
+        BuildRuns.objects.filter(kci_id__in=build_kci_ids).values_list("kci_id", "id")
+    )
+    test_run_ids_by_kci_id = dict(
+        TestRuns.objects.filter(kci_id__in=test_kci_ids).values_list("kci_id", "id")
+    )
+
+    for incident in incidents_buf:
+        if incident.build_id:
+            incident.build_run_id = build_run_ids_by_kci_id.get(incident.build_id)
+        if incident.test_id:
+            incident.test_run_id = test_run_ids_by_kci_id.get(incident.test_id)
 
 
 def flush_buffers(
@@ -441,6 +473,7 @@ def flush_buffers(
             assign_test_definition_ids(test_runs_buf)
             consume_buffer(tests_buf, "tests")
             consume_buffer(test_runs_buf, "test_runs")
+            assign_incident_run_ids(incidents_buf)
             consume_buffer(incidents_buf, "incidents")
             aggregate_checkouts_and_pendings(
                 checkouts_instances=checkouts_buf,

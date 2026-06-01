@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional, TypedDict
 
+from django.conf import settings
 from django.db import connection
 
 from kernelCI_app.cache import get_query_cache, set_query_cache
@@ -10,6 +11,10 @@ from kernelCI_app.queries.duration import (
     get_build_duration_clause,
 )
 from kernelCI_app.typeModels.hardwareDetails import CommitHead, Tree
+
+
+def _use_runs_read_path() -> bool:
+    return settings.DB_SCHEMA_REFACTOR_READ_PATH == "runs"
 
 
 def _get_hardware_tree_heads_clause(*, id_only: bool) -> str:
@@ -109,6 +114,84 @@ def _get_hardware_listing_count_clauses() -> str:
     return build_count_clause + boot_count_clause + test_count_clause
 
 
+def _get_hardware_listing_count_clauses_from_runs() -> str:
+    build_count_clause = """
+    COUNT(DISTINCT CASE WHEN "build_status" = 'PASS' AND build_id
+        NOT LIKE 'maestro:dummy_%%' THEN build_id END) AS pass_builds,
+    COUNT(DISTINCT CASE WHEN "build_status" = 'FAIL' AND build_id
+        NOT LIKE 'maestro:dummy_%%' THEN build_id END) AS fail_builds,
+    COUNT(DISTINCT CASE WHEN "build_status" IS NULL AND build_id IS
+        NOT NULL AND build_id NOT LIKE 'maestro:dummy_%%' THEN build_id END)
+        AS null_builds,
+    COUNT(DISTINCT CASE WHEN "build_status" = 'ERROR' AND build_id
+        NOT LIKE 'maestro:dummy_%%' THEN build_id END) AS error_builds,
+    COUNT(DISTINCT CASE WHEN "build_status" = 'MISS' AND build_id
+        NOT LIKE 'maestro:dummy_%%' THEN build_id END) AS miss_builds,
+    COUNT(DISTINCT CASE WHEN "build_status" = 'DONE' AND build_id
+        NOT LIKE 'maestro:dummy_%%' THEN build_id END) AS done_builds,
+    COUNT(DISTINCT CASE WHEN "build_status" = 'SKIP' AND build_id
+        NOT LIKE 'maestro:dummy_%%' THEN build_id END) AS skip_builds,
+    """
+
+    boot_count_clause = """
+    COUNT(CASE WHEN is_boot = TRUE AND "status" = 'PASS' THEN 1 END) AS pass_boots,
+    COUNT(CASE WHEN is_boot = TRUE AND "status" = 'FAIL' THEN 1 END) AS fail_boots,
+    SUM(CASE WHEN is_boot = TRUE AND "status" IS NULL AND id IS NOT NULL
+        THEN 1 ELSE 0 END) AS null_boots,
+    COUNT(CASE WHEN is_boot = TRUE AND "status" = 'ERROR' THEN 1 END) AS error_boots,
+    COUNT(CASE WHEN is_boot = TRUE AND "status" = 'MISS' THEN 1 END) AS miss_boots,
+    COUNT(CASE WHEN is_boot = TRUE AND "status" = 'DONE' THEN 1 END) AS done_boots,
+    COUNT(CASE WHEN is_boot = TRUE AND "status" = 'SKIP' THEN 1 END) AS skip_boots,
+    """
+
+    test_count_clause = """
+    COUNT(CASE WHEN is_boot = FALSE AND "status" = 'PASS' THEN 1 END) AS pass_tests,
+    COUNT(CASE WHEN is_boot = FALSE AND "status" = 'FAIL' THEN 1 END) AS fail_tests,
+    SUM(CASE WHEN is_boot = FALSE AND "status" IS NULL AND id IS NOT NULL
+        THEN 1 ELSE 0 END) AS null_tests,
+    COUNT(CASE WHEN is_boot = FALSE AND "status" = 'ERROR' THEN 1 END) AS error_tests,
+    COUNT(CASE WHEN is_boot = FALSE AND "status" = 'MISS' THEN 1 END) AS miss_tests,
+    COUNT(CASE WHEN is_boot = FALSE AND "status" = 'DONE' THEN 1 END) AS done_tests,
+    COUNT(CASE WHEN is_boot = FALSE AND "status" = 'SKIP' THEN 1 END) AS skip_tests
+    """
+
+    return build_count_clause + boot_count_clause + test_count_clause
+
+
+def _get_runs_boot_test_duration_clause(
+    boots_duration: tuple[Optional[int], Optional[int]],
+    tests_duration: tuple[Optional[int], Optional[int]],
+    *,
+    table_alias: str = "tests",
+) -> str:
+    clause = ""
+    duration_min, duration_max = tests_duration
+    if duration_min is not None:
+        clause += (
+            f"AND ({table_alias}.is_boot = TRUE "
+            f"OR {table_alias}.duration >= %(test_duration_min)s)\n"
+        )
+    if duration_max is not None:
+        clause += (
+            f"AND ({table_alias}.is_boot = TRUE "
+            f"OR {table_alias}.duration <= %(test_duration_max)s)\n"
+        )
+
+    duration_min, duration_max = boots_duration
+    if duration_min is not None:
+        clause += (
+            f"AND ({table_alias}.is_boot = FALSE "
+            f"OR {table_alias}.duration >= %(boot_duration_min)s)\n"
+        )
+    if duration_max is not None:
+        clause += (
+            f"AND ({table_alias}.is_boot = FALSE "
+            f"OR {table_alias}.duration <= %(boot_duration_max)s)\n"
+        )
+
+    return clause
+
+
 def get_hardware_listing_data(
     *,
     start_date: datetime,
@@ -126,6 +209,13 @@ def get_hardware_listing_data(
     separated request values can be full SHAs or tag strings stored on checkouts).
     Still scoped by the test start_time and origin filters below.
     """
+    if _use_runs_read_path():
+        return _get_hardware_listing_data_from_runs(
+            start_date=start_date,
+            end_date=end_date,
+            origin=origin,
+            commits_list=commits_list,
+        )
 
     count_clauses = _get_hardware_listing_count_clauses()
 
@@ -201,6 +291,79 @@ def get_hardware_listing_data(
         return cursor.fetchall()
 
 
+def _get_hardware_listing_data_from_runs(
+    *,
+    start_date: datetime,
+    end_date: datetime,
+    origin: str,
+    commits_list: Optional[list[str]] = None,
+) -> list[dict]:
+    count_clauses = _get_hardware_listing_count_clauses_from_runs()
+
+    params = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "origin": origin,
+    }
+
+    if commits_list:
+        params["commits_list"] = commits_list
+        checkout_ids_select = """
+            SELECT C.id
+            FROM checkouts C
+            WHERE C.git_commit_hash = ANY(%(commits_list)s)
+               OR (
+                   C.git_commit_tags IS NOT NULL
+                   AND C.git_commit_tags && %(commits_list)s::text[]
+               )
+            """
+    else:
+        checkout_ids_select = _get_hardware_tree_heads_clause(id_only=True)
+
+    selected_checkouts_cte = f"""
+            selected_checkouts AS (
+                {checkout_ids_select}
+            ),
+        """
+
+    query = f"""
+        WITH
+            {selected_checkouts_cte}
+            relevant_tests AS (
+                SELECT
+                    tests.environment_compatible AS hardware,
+                    tests.platform AS platform,
+                    tests.status,
+                    tests.is_boot,
+                    tests.kci_id AS id,
+                    b.kci_id AS build_id,
+                    b.status AS build_status
+                FROM
+                    test_runs AS tests
+                    INNER JOIN build_runs b ON tests.build_run_id = b.id
+                    JOIN selected_checkouts AC ON b.checkout_id = AC.id
+                WHERE
+                    tests.platform IS NOT NULL
+                    AND tests.origin = %(origin)s
+                    AND tests.start_time >= %(start_date)s
+                    AND tests.start_time <= %(end_date)s
+            )
+        SELECT
+            platform,
+            hardware,
+            {count_clauses}
+        FROM
+            relevant_tests
+        GROUP BY
+            platform,
+            hardware
+    """
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        return cursor.fetchall()
+
+
 def get_hardware_listing_data_bulk(
     keys: list[tuple[str, str]],
     start_date: datetime,
@@ -209,6 +372,13 @@ def get_hardware_listing_data_bulk(
 ) -> list[dict]:
     if not keys:
         return []
+    if _use_runs_read_path():
+        return _get_hardware_listing_data_bulk_from_runs(
+            keys=keys,
+            start_date=start_date,
+            end_date=end_date,
+            labs_by_key=labs_by_key,
+        )
 
     count_clauses = _get_hardware_listing_count_clauses()
 
@@ -250,6 +420,84 @@ def get_hardware_listing_data_bulk(
                     WHERE(
                         tests.environment_compatible @> ARRAY[key_list.hardware_id]::TEXT[]
                         OR tests.environment_misc ->> 'platform' = key_list.hardware_id
+                    )
+                    AND tests.origin = key_list.origin
+                    AND tests.misc ->> 'runtime' = key_list.lab_name
+                    )
+            )
+        SELECT
+            platform,
+            hardware,
+            test_origin,
+            {count_clauses}
+        FROM
+            relevant_tests
+        GROUP BY
+            platform,
+            hardware,
+            test_origin
+    """
+
+    params = {
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    for i, (hardware_id, origin, lab_name) in enumerate(triples):
+        params[f"hardware_id_{i}"] = hardware_id
+        params[f"origin_{i}"] = origin
+        params[f"lab_name_{i}"] = lab_name
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        return dict_fetchall(cursor)
+
+
+def _get_hardware_listing_data_bulk_from_runs(
+    keys: list[tuple[str, str]],
+    start_date: datetime,
+    end_date: datetime,
+    labs_by_key: dict[tuple[str, str], set[str]],
+) -> list[dict]:
+    count_clauses = _get_hardware_listing_count_clauses_from_runs()
+
+    triples: list[tuple[str, str, str]] = []
+    for hardware_id, origin in keys:
+        lab_names = labs_by_key[(hardware_id, origin)]
+        for lab in lab_names:
+            triples.append((hardware_id, origin, lab))
+
+    values_clause = ", ".join(
+        [
+            f"(%(hardware_id_{i})s, %(origin_{i})s, %(lab_name_{i})s)"
+            for i in range(len(triples))
+        ]
+    )
+
+    query = f"""
+        WITH
+            relevant_tests AS (
+                SELECT
+                    tests.environment_compatible AS hardware,
+                    tests.platform AS platform,
+                    tests.status,
+                    tests.is_boot,
+                    tests.origin AS test_origin,
+                    tests.kci_id AS id,
+                    b.kci_id AS build_id,
+                    b.status AS build_status
+                FROM
+                    test_runs AS tests
+                    INNER JOIN build_runs b ON tests.build_run_id = b.id
+                WHERE
+                    tests.platform IS NOT NULL
+                    AND tests.start_time >= %(start_date)s
+                    AND tests.start_time <= %(end_date)s
+                    AND EXISTS (
+                    SELECT 1
+                    FROM (VALUES {values_clause}) AS key_list(hardware_id, origin, lab_name)
+                    WHERE(
+                        tests.environment_compatible @> ARRAY[key_list.hardware_id]::TEXT[]
+                        OR tests.platform = key_list.hardware_id
                     )
                     AND tests.origin = key_list.origin
                     AND tests.misc ->> 'runtime' = key_list.lab_name
@@ -430,6 +678,18 @@ def get_hardware_details_summary(
     if tests_duration is None:
         tests_duration = (None, None)
 
+    if _use_runs_read_path():
+        return _get_hardware_details_summary_from_runs(
+            hardware_id=hardware_id,
+            origin=origin,
+            commit_hashes=commit_hashes,
+            builds_duration=builds_duration,
+            boots_duration=boots_duration,
+            tests_duration=tests_duration,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+        )
+
     cache_key = "hardwareDetailsSummary"
 
     tests_cache_params = {
@@ -569,9 +829,245 @@ def get_hardware_details_summary(
         return query_rows
 
 
+def _get_hardware_details_summary_from_runs(
+    *,
+    hardware_id: str,
+    origin: str,
+    commit_hashes: list[str],
+    builds_duration: tuple[Optional[int], Optional[int]],
+    boots_duration: tuple[Optional[int], Optional[int]],
+    tests_duration: tuple[Optional[int], Optional[int]],
+    start_datetime: datetime,
+    end_datetime: datetime,
+):
+    cache_key = "hardwareDetailsSummaryRuns"
+
+    tests_cache_params = {
+        "hardware_id": hardware_id,
+        "origin": origin,
+        "commit_hashes": commit_hashes,
+        "start_date": start_datetime.timestamp(),
+        "end_date": end_datetime.timestamp(),
+        "builds_duration": builds_duration,
+        "boots_duration": boots_duration,
+        "tests_duration": tests_duration,
+    }
+
+    query_rows = get_query_cache(cache_key, tests_cache_params)
+    if query_rows is not None:
+        return query_rows
+
+    builds_duration_clause = get_build_duration_clause(builds_duration)
+    boots_tests_duration_clause = _get_runs_boot_test_duration_clause(
+        boots_duration, tests_duration, table_alias="matching_tests"
+    )
+
+    query = """
+           WITH selected_builds AS MATERIALIZED (
+             SELECT
+                 builds.id,
+                 builds.kci_id,
+                 builds.build_definition_id,
+                 builds.status,
+                 builds.misc,
+                 builds.start_time,
+                 builds.duration,
+                 builds.origin,
+                 checkouts.id AS checkout_id,
+                 checkouts.origin AS checkout_origin,
+                 checkouts.tree_name,
+                 checkouts.git_repository_url,
+                 checkouts.git_commit_tags,
+                 checkouts.git_commit_name,
+                 checkouts.git_repository_branch,
+                 checkouts.git_commit_hash
+             FROM
+                checkouts
+            INNER JOIN build_runs AS builds ON
+                builds.checkout_id = checkouts.id
+            WHERE
+                checkouts.git_commit_hash = ANY(%(commits)s)
+           ),
+           matching_tests AS MATERIALIZED (
+             SELECT
+                 tests.id,
+                 tests.build_run_id,
+                 tests.status,
+                 tests.environment_compatible,
+                 tests.misc->>'runtime' AS lab,
+                 tests.platform,
+                 tests.is_boot,
+                 tests.duration
+             FROM
+                selected_builds AS builds
+            INNER JOIN test_runs AS tests ON
+                tests.build_run_id = builds.id
+            WHERE
+                (
+                    tests.environment_compatible @> ARRAY[%(platform)s]::TEXT[]
+                    OR tests.platform = %(platform)s
+                )
+                AND tests.origin = %(origin)s
+                AND tests.start_time >= %(start_date)s
+                AND tests.start_time <= %(end_date)s
+           ),
+           build_groups AS MATERIALIZED (
+             SELECT
+                 matching_tests.build_run_id,
+                 matching_tests.environment_compatible,
+                 matching_tests.platform,
+                 COUNT(DISTINCT builds.kci_id) AS count,
+                 count(DISTINCT incidents.id) AS incidents_count,
+                 array_agg(DISTINCT incidents.issue_id || ',' || incidents.issue_version::text)
+                     AS known_issues
+             FROM
+                matching_tests
+            INNER JOIN selected_builds AS builds ON
+                builds.id = matching_tests.build_run_id
+            INNER JOIN build_definitions ON
+                builds.build_definition_id = build_definitions.id
+            LEFT OUTER JOIN incidents ON
+                builds.id = incidents.build_run_id
+            WHERE
+                (
+                    build_definitions.config_name IS NOT NULL
+                    AND builds.kci_id not like 'maestro:dummy_%%'
+                )
+                AND builds.origin = %(origin)s
+                AND builds.start_time >= %(start_date)s
+                AND builds.start_time <= %(end_date)s
+                {0}
+            GROUP BY
+                matching_tests.build_run_id,
+                matching_tests.environment_compatible,
+                matching_tests.platform
+           ),
+           test_groups AS MATERIALIZED (
+             SELECT
+                 matching_tests.build_run_id,
+                 matching_tests.status,
+                 matching_tests.environment_compatible,
+                 matching_tests.lab,
+                 matching_tests.platform,
+                 matching_tests.is_boot,
+                 COUNT(*) AS count,
+                 count(DISTINCT incidents.id) as incidents_count,
+                 array_agg(DISTINCT incidents.issue_id || ',' || incidents.issue_version::text)
+                     as known_issues
+             FROM
+                matching_tests
+            LEFT OUTER JOIN incidents ON
+                matching_tests.id = incidents.test_run_id
+            WHERE
+                TRUE
+                {1}
+            GROUP BY
+                matching_tests.build_run_id,
+                matching_tests.status,
+                matching_tests.environment_compatible,
+                matching_tests.lab,
+                matching_tests.platform,
+                matching_tests.is_boot
+           )
+           (SELECT
+                 build_groups.count AS count,
+                 builds.checkout_origin AS origin,
+                 builds.status AS status,
+                 build_groups.incidents_count AS incidents_count,
+                 build_groups.known_issues AS known_issues,
+                 array[build_definitions.compiler, build_definitions.architecture]
+                     AS compiler_arch,
+                 build_definitions.config_name,
+                 builds.misc->>'lab' AS lab,
+                 build_groups.platform AS platform,
+                 build_groups.environment_compatible,
+                 builds.checkout_origin AS origin,
+                 builds.tree_name,
+                 builds.git_repository_url,
+                 builds.git_commit_tags,
+                 builds.git_commit_name,
+                 builds.git_repository_branch,
+                 builds.git_commit_hash,
+                 true AS is_build,
+                 false AS is_test,
+                 false AS is_boot
+             FROM
+                build_groups
+            INNER JOIN selected_builds AS builds ON
+                builds.id = build_groups.build_run_id
+            INNER JOIN build_definitions ON
+                builds.build_definition_id = build_definitions.id)
+            UNION ALL
+            (SELECT
+                 test_groups.count AS count,
+                 builds.checkout_origin AS origin,
+                 test_groups.status AS status,
+                 test_groups.incidents_count as incidents_count,
+                 test_groups.known_issues as known_issues,
+                 array[build_definitions.compiler, build_definitions.architecture]
+                     AS compiler_arch,
+                 build_definitions.config_name,
+                 test_groups.lab AS lab,
+                 test_groups.platform AS platform,
+                 test_groups.environment_compatible,
+                 builds.checkout_origin AS origin,
+                 builds.tree_name,
+                 builds.git_repository_url,
+                 builds.git_commit_tags,
+                 builds.git_commit_name,
+                 builds.git_repository_branch,
+                 builds.git_commit_hash,
+                 false AS is_build,
+                 true AS is_test,
+                 test_groups.is_boot
+             FROM
+                test_groups
+            INNER JOIN selected_builds AS builds ON
+                builds.id = test_groups.build_run_id
+            INNER JOIN build_definitions ON
+                builds.build_definition_id = build_definitions.id);
+    """.format(
+        builds_duration_clause,
+        boots_tests_duration_clause,
+    )
+
+    build_duration_min, build_duration_max = builds_duration
+    boot_duration_min, boot_duration_max = boots_duration
+    test_duration_min, test_duration_max = tests_duration
+
+    params = {
+        "platform": hardware_id,
+        "origin": origin,
+        "start_date": start_datetime,
+        "end_date": end_datetime,
+        "commits": commit_hashes,
+        "build_duration_min": build_duration_min,
+        "build_duration_max": build_duration_max,
+        "boot_duration_min": boot_duration_min,
+        "boot_duration_max": boot_duration_max,
+        "test_duration_min": test_duration_min,
+        "test_duration_max": test_duration_max,
+    }
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        query_rows = dict_fetchall(cursor)
+        set_query_cache(key=cache_key, params=tests_cache_params, rows=query_rows)
+        return query_rows
+
+
 def query_records(
     *, hardware_id: str, origin: str, trees: list[Tree], start_date: int, end_date: int
 ) -> list[dict] | None:
+    if _use_runs_read_path():
+        return _query_records_from_runs(
+            hardware_id=hardware_id,
+            origin=origin,
+            trees=trees,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
     commit_hashes = [tree.head_git_commit_hash for tree in trees]
 
     query = """
@@ -654,6 +1150,118 @@ def query_records(
         return query_rows
 
 
+def _query_records_from_runs(
+    *, hardware_id: str, origin: str, trees: list[Tree], start_date: int, end_date: int
+) -> list[dict] | None:
+    commit_hashes = [tree.head_git_commit_hash for tree in trees]
+
+    query = """
+            WITH selected_builds AS MATERIALIZED (
+                SELECT
+                    builds.id,
+                    builds.kci_id,
+                    builds.misc,
+                    builds.config_url,
+                    builds.status,
+                    builds.duration,
+                    builds.log_url,
+                    builds.start_time,
+                    builds.origin,
+                    build_definitions.architecture,
+                    build_definitions.config_name,
+                    build_definitions.compiler,
+                    checkouts.git_repository_url,
+                    checkouts.git_repository_branch,
+                    checkouts.git_commit_name,
+                    checkouts.git_commit_hash,
+                    checkouts.tree_name,
+                    checkouts.origin AS checkout_origin
+                FROM
+                    checkouts
+                INNER JOIN build_runs AS builds ON
+                    builds.checkout_id = checkouts.id
+                INNER JOIN build_definitions ON
+                    builds.build_definition_id = build_definitions.id
+                WHERE
+                    checkouts.git_commit_hash IN ({0})
+            )
+            SELECT
+                tests.kci_id AS id,
+                tests.origin AS test_origin,
+                tests.environment_misc,
+                test_definitions.path,
+                tests.comment,
+                tests.log_url,
+                tests.status,
+                tests.start_time,
+                tests.duration,
+                tests.misc,
+                builds.kci_id AS build_id,
+                tests.environment_compatible,
+                builds.architecture AS build__architecture,
+                builds.config_name AS build__config_name,
+                builds.misc AS build__misc,
+                builds.config_url AS build__config_url,
+                builds.compiler AS build__compiler,
+                builds.status AS build__status,
+                builds.duration AS build__duration,
+                builds.log_url AS build__log_url,
+                builds.start_time AS build__start_time,
+                builds.origin AS build__origin,
+                builds.git_repository_url AS build__checkout__git_repository_url,
+                builds.git_repository_branch AS build__checkout__git_repository_branch,
+                builds.git_commit_name AS build__checkout__git_commit_name,
+                builds.git_commit_hash AS build__checkout__git_commit_hash,
+                builds.tree_name AS build__checkout__tree_name,
+                builds.checkout_origin AS build__checkout__origin,
+                incidents.id AS incidents__id,
+                incidents.issue_id AS incidents__issue__id,
+                issues.version AS incidents__issue__version,
+                issues.comment AS incidents__issue__comment,
+                issues.report_url AS incidents__issue__report_url,
+                incidents.test_id AS incidents__test_id,
+                T7.issue_id AS build__incidents__issue__id,
+                T8.version AS build__incidents__issue__version
+            FROM
+                test_runs AS tests
+            INNER JOIN test_definitions ON
+                tests.test_definition_id = test_definitions.id
+            INNER JOIN selected_builds AS builds ON
+                tests.build_run_id = builds.id
+            LEFT OUTER JOIN incidents ON
+                tests.id = incidents.test_run_id
+            LEFT OUTER JOIN issues ON
+                incidents.issue_id = issues.id AND incidents.issue_version = issues.version
+            LEFT OUTER JOIN incidents T7 ON
+                builds.id = T7.build_run_id
+            LEFT OUTER JOIN issues T8 ON
+                T7.issue_id = T8.id AND T7.issue_version = T8.version
+            WHERE
+                (
+                    tests.environment_compatible @> ARRAY[%s]::TEXT[]
+                    OR tests.platform = %s
+                )
+                AND tests.origin = %s
+                AND tests.start_time >= %s
+                AND tests.start_time <= %s
+            ORDER BY
+                issues."_timestamp" DESC
+            """.format(",".join(["%s"] * len(commit_hashes)))
+
+    params = commit_hashes + [
+        hardware_id,
+        hardware_id,
+        origin,
+        start_date,
+        end_date,
+    ]
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        query_rows = dict_fetchall(cursor)
+        return query_rows
+
+
 def get_hardware_summary_data(
     *,
     keys: list[tuple[str, str]],
@@ -667,6 +1275,13 @@ def get_hardware_summary_data(
     """
     if not keys:
         return []
+    if _use_runs_read_path():
+        return _get_hardware_summary_data_from_runs(
+            keys=keys,
+            start_date=start_date,
+            end_date=end_date,
+            labs_by_key=labs_by_key,
+        )
 
     triples: list[tuple[str, str, str]] = []
     for hardware_id, origin in keys:
@@ -740,6 +1355,89 @@ def get_hardware_summary_data(
         return dict_fetchall(cursor)
 
 
+def _get_hardware_summary_data_from_runs(
+    *,
+    keys: list[tuple[str, str]],
+    start_date: datetime,
+    end_date: datetime,
+    labs_by_key: dict[tuple[str, str], set[str]],
+) -> list[dict] | None:
+    triples: list[tuple[str, str, str]] = []
+    for hardware_id, origin in keys:
+        lab_names = labs_by_key[(hardware_id, origin)]
+        for lab in lab_names:
+            triples.append((hardware_id, origin, lab))
+
+    with connection.cursor() as cursor:
+        values_clause = ", ".join(["(%s, %s, %s)"] * len(triples))
+
+        query = f"""
+            SELECT
+                tests.kci_id AS id,
+                tests.origin AS test_origin,
+                tests.environment_misc,
+                test_definitions.path,
+                tests.comment,
+                tests.log_url,
+                tests.status,
+                tests.start_time,
+                tests.duration,
+                tests.misc,
+                builds.kci_id AS build_id,
+                tests.environment_compatible,
+                build_definitions.architecture,
+                build_definitions.config_name,
+                builds.misc AS build_misc,
+                builds.config_url,
+                build_definitions.compiler,
+                builds.status AS build_status,
+                builds.duration AS build_duration,
+                builds.log_url AS build_log_url,
+                builds.start_time AS build_start_time,
+                builds.origin AS build_origin,
+                checkouts.git_repository_url,
+                checkouts.git_repository_branch,
+                checkouts.git_commit_name,
+                checkouts.git_commit_hash,
+                checkouts.tree_name,
+                checkouts.origin AS checkout_origin
+            FROM
+                test_runs AS tests
+            INNER JOIN test_definitions ON
+                tests.test_definition_id = test_definitions.id
+            INNER JOIN build_runs AS builds ON
+                tests.build_run_id = builds.id
+            INNER JOIN build_definitions ON
+                builds.build_definition_id = build_definitions.id
+            INNER JOIN checkouts ON
+                builds.checkout_id = checkouts.id
+            WHERE
+                tests.start_time >= %s
+                AND tests.start_time <= %s
+                AND tests.status = 'FAIL'
+                AND EXISTS (
+                SELECT 1
+                FROM (VALUES {values_clause}) AS key_list(hardware_id, origin, lab_name)
+                WHERE(
+                    tests.environment_compatible @> ARRAY[key_list.hardware_id]::TEXT[]
+                    OR tests.platform = key_list.hardware_id
+                )
+                AND tests.origin = key_list.origin
+                AND tests.misc ->> 'runtime' = key_list.lab_name
+                )
+            ORDER BY
+                tests.start_time DESC
+            """
+
+        params = [start_date, end_date]
+        for hardware_id, origin, lab_name in triples:
+            params.extend([hardware_id, origin, lab_name])
+
+        cursor.execute(query, params)
+
+        return dict_fetchall(cursor)
+
+
 def get_hardware_trees_head_commits(
     *,
     hardware_id: str,
@@ -747,6 +1445,13 @@ def get_hardware_trees_head_commits(
     start_datetime: datetime,
     end_datetime: datetime,
 ) -> list[tuple[str, str]]:
+    if _use_runs_read_path():
+        return _get_hardware_trees_head_commits_from_runs(
+            hardware_id=hardware_id,
+            origin=origin,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+        )
 
     # similar to the get_hardware_trees_data, except we limit the information
     # being brought to the commit hash
@@ -824,6 +1529,83 @@ def get_hardware_trees_head_commits(
     return trees
 
 
+def _get_hardware_trees_head_commits_from_runs(
+    *,
+    hardware_id: str,
+    origin: str,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> list[tuple[str, str]]:
+    cache_key = "hardwareTreesHeadCommitsRuns"
+
+    cache_params = {
+        "hardware": hardware_id,
+        "origin": origin,
+        "start_date": start_datetime.timestamp(),
+        "end_date": end_datetime.timestamp(),
+    }
+
+    trees: list[tuple[str, str]] = get_query_cache(cache_key, cache_params)
+
+    if trees:
+        return trees
+
+    tree_head_clause = _get_hardware_tree_heads_clause(id_only=False)
+
+    query = f"""
+    WITH
+        tree_heads AS (
+            {tree_head_clause}
+        )
+    SELECT DISTINCT
+        ON (
+            TH.tree_name,
+            TH.git_repository_branch,
+            TH.git_repository_url,
+            TH.git_commit_hash
+        ) TH.tree_name,
+        TH.git_commit_hash
+    FROM
+        test_runs AS tests
+        INNER JOIN build_runs AS builds ON tests.build_run_id = builds.id
+        INNER JOIN tree_heads TH ON builds.checkout_id = TH.id
+    WHERE
+        (
+            (
+                tests.environment_compatible @> ARRAY[%(hardware)s]::TEXT[]
+                OR tests.platform = %(hardware)s
+            )
+            AND tests.origin = %(origin)s
+            AND TH.start_time >= %(start_date)s
+            AND TH.start_time <= %(end_date)s
+        )
+    ORDER BY
+        TH.tree_name ASC,
+        TH.git_repository_branch ASC,
+        TH.git_repository_url ASC,
+        TH.git_commit_hash ASC,
+        TH.start_time DESC
+    """
+
+    params = {
+        "hardware": hardware_id,
+        "origin": origin,
+        "start_date": start_datetime,
+        "end_date": end_datetime,
+    }
+    trees = []
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        tree_records = dict_fetchall(cursor)
+        trees = [
+            (str(idx), tree["git_commit_hash"])
+            for (idx, tree) in enumerate(tree_records)
+        ]
+        set_query_cache(key=cache_key, params=cache_params, rows=trees)
+
+    return trees
+
+
 def get_hardware_trees_data(
     *,
     hardware_id: str,
@@ -831,6 +1613,14 @@ def get_hardware_trees_data(
     start_datetime: datetime,
     end_datetime: datetime,
 ) -> list[Tree]:
+    if _use_runs_read_path():
+        return _get_hardware_trees_data_from_runs(
+            hardware_id=hardware_id,
+            origin=origin,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+        )
+
     cache_key = "hardwareDetailsTreeData"
 
     params = {
@@ -875,6 +1665,92 @@ def get_hardware_trees_data(
                 (
                     tests.environment_compatible @> ARRAY[%(hardware)s]::TEXT[]
                     OR tests.environment_misc ->> 'platform' = %(hardware)s
+                )
+                AND tests.origin = %(origin)s
+                AND TH.start_time >= %(start_date)s
+                AND TH.start_time <= %(end_date)s
+            )
+        ORDER BY
+            TH.tree_name ASC,
+            TH.git_repository_branch ASC,
+            TH.git_repository_url ASC,
+            TH.git_commit_hash ASC,
+            TH.start_time DESC
+        """
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            tree_records = dict_fetchall(cursor)
+
+        trees = []
+        for idx, tree in enumerate(tree_records):
+            trees.append(
+                Tree(
+                    index=str(idx),
+                    tree_name=tree["tree_name"],
+                    origin=tree["origin"],
+                    git_repository_branch=tree["git_repository_branch"],
+                    git_repository_url=tree["git_repository_url"],
+                    head_git_commit_name=tree["git_commit_name"],
+                    head_git_commit_hash=tree["git_commit_hash"],
+                    head_git_commit_tag=tree["git_commit_tags"],
+                    selected_commit_status=None,
+                    is_selected=None,
+                )
+            )
+
+        set_query_cache(key=cache_key, params=params, rows=trees)
+
+    return trees
+
+
+def _get_hardware_trees_data_from_runs(
+    *,
+    hardware_id: str,
+    origin: str,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> list[Tree]:
+    cache_key = "hardwareDetailsTreeDataRuns"
+
+    params = {
+        "hardware": hardware_id,
+        "origin": origin,
+        "start_date": start_datetime,
+        "end_date": end_datetime,
+    }
+
+    trees: list[Tree] = get_query_cache(cache_key, params)
+
+    tree_head_clause = _get_hardware_tree_heads_clause(id_only=False)
+
+    if not trees:
+        query = f"""
+        WITH
+            tree_heads AS (
+                {tree_head_clause}
+            )
+        SELECT DISTINCT
+            ON (
+                TH.tree_name,
+                TH.git_repository_branch,
+                TH.git_repository_url,
+                TH.git_commit_hash
+            ) TH.tree_name,
+            TH.origin,
+            TH.git_repository_branch,
+            TH.git_repository_url,
+            TH.git_commit_name,
+            TH.git_commit_hash,
+            TH.git_commit_tags
+        FROM
+            test_runs AS tests
+            INNER JOIN build_runs AS builds ON tests.build_run_id = builds.id
+            INNER JOIN tree_heads TH ON builds.checkout_id = TH.id
+        WHERE
+            (
+                (
+                    tests.environment_compatible @> ARRAY[%(hardware)s]::TEXT[]
+                    OR tests.platform = %(hardware)s
                 )
                 AND tests.origin = %(origin)s
                 AND TH.start_time >= %(start_date)s

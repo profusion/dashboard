@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+from django.test import override_settings
+
 from kernelCI_app.queries.notifications import (
     get_checkout_summary_data,
     get_issues_summary_data,
@@ -62,6 +64,20 @@ class TestKcidbNewIssues:
         assert result == expected_result
         mock_execute_query.assert_called_once()
 
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.notifications.kcidb_execute_query")
+    def test_kcidb_new_issues_runs_read_path(self, mock_execute_query):
+        mock_execute_query.return_value = []
+
+        kcidb_new_issues()
+
+        query = mock_execute_query.call_args.args[0]
+        assert "JOIN build_runs b ON inc.build_run_id = b.id" in query
+        assert "JOIN test_runs t ON inc.test_run_id = t.id" in query
+        assert "JOIN test_definitions td" in query
+        assert "b.kci_id AS build_id" in query
+        assert "t.kci_id AS test_id" in query
+
 
 class TestKcidbIssueDetails:
     @patch("kernelCI_app.queries.notifications.kcidb_execute_query")
@@ -92,6 +108,18 @@ class TestKcidbBuildIncidents:
         assert "%(issue_id)s" in call_args[0][0]
         assert call_args[0][1]["issue_id"] == "issue"
 
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.notifications.kcidb_execute_query")
+    def test_kcidb_build_incidents_runs_read_path(self, mock_execute_query):
+        mock_execute_query.return_value = []
+
+        kcidb_build_incidents("issue")
+
+        query = mock_execute_query.call_args.args[0]
+        assert "FROM build_runs b" in query
+        assert "inc.build_run_id = b.id" in query
+        assert "b.kci_id AS id" in query
+
 
 class TestKcidbTestIncidents:
     @patch("kernelCI_app.queries.notifications.kcidb_execute_query")
@@ -106,6 +134,20 @@ class TestKcidbTestIncidents:
         call_args = mock_execute_query.call_args
         assert "%(issue_id)s" in call_args[0][0]
         assert call_args[0][1]["issue_id"] == "issue"
+
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.notifications.kcidb_execute_query")
+    def test_kcidb_test_incidents_runs_read_path(self, mock_execute_query):
+        mock_execute_query.return_value = []
+
+        kcidb_test_incidents("issue")
+
+        query = mock_execute_query.call_args.args[0]
+        assert "FROM test_runs t" in query
+        assert "JOIN test_definitions td" in query
+        assert "inc.test_run_id = t.id" in query
+        assert "t.platform" in query
+        assert "environment_misc->>'platform'" not in query
 
 
 class TestKcidbLastTestWithoutIssue:
@@ -137,6 +179,30 @@ class TestKcidbLastTestWithoutIssue:
         assert params["branch"] == issue["git_repository_branch"]
         assert params["path"] == incident["path"]
         assert params["platform"] == incident["platform"]
+
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.notifications.kcidb_execute_query")
+    def test_kcidb_last_test_without_issue_runs_read_path(self, mock_execute_query):
+        issue = {
+            "id": "issue",
+            "git_repository_url": "https://my_url.com",
+            "git_repository_branch": "master",
+        }
+        incident = {
+            "path": "boot",
+            "platform": "x86_64",
+            "oldest_timestamp": "2025-11-11T10:00:00Z",
+        }
+        mock_execute_query.return_value = []
+
+        kcidb_last_test_without_issue(issue, incident)
+
+        query = mock_execute_query.call_args.args[0]
+        assert "FROM test_runs t" in query
+        assert "JOIN build_runs b ON t.build_run_id = b.id" in query
+        assert "JOIN test_definitions td" in query
+        assert "JOIN incidents inc ON inc.test_run_id = t.id" in query
+        assert "t.platform = %(platform)s" in query
 
 
 class TestGetCheckoutSummaryData:
@@ -232,6 +298,33 @@ class TestKcidbTestsResults:
 
         assert result == []
 
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.notifications.dict_fetchall")
+    @patch("kernelCI_app.queries.notifications.connection")
+    def test_kcidb_tests_results_runs_read_path(
+        self, mock_connection, mock_dict_fetchall
+    ):
+        mock_dict_fetchall.return_value = []
+        mock_cursor = setup_mock_cursor(mock_connection)
+
+        kcidb_tests_results(
+            origin="maestro",
+            giturl="https://my_url.com",
+            branch="master",
+            hash="abc123",
+            paths=["boot", "boot.nfs"],
+            interval="7 days",
+            group_size=10,
+        )
+
+        query = mock_cursor.execute.call_args.args[0]
+        assert "FROM test_runs t" in query
+        assert "JOIN test_definitions td" in query
+        assert "JOIN build_runs b ON t.build_run_id = b.id" in query
+        assert "t.platform AS platform" in query
+        assert "td.path LIKE" in query
+        assert "environment_misc->>'platform'" not in query
+
 
 class TestGetIssuesSummaryData:
     @patch("kernelCI_app.queries.notifications.dict_fetchall")
@@ -252,3 +345,20 @@ class TestGetIssuesSummaryData:
         result = get_issues_summary_data(checkout_ids=[])
 
         assert result == []
+
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.notifications.dict_fetchall")
+    @patch("kernelCI_app.queries.notifications.connections")
+    def test_get_issues_summary_data_runs_read_path(
+        self, mock_connections, mock_dict_fetchall
+    ):
+        mock_dict_fetchall.return_value = []
+        mock_cursor = MagicMock()
+        mock_connections.__getitem__.return_value.cursor.return_value.__enter__.return_value = mock_cursor
+
+        get_issues_summary_data(checkout_ids=["checkout_1"])
+
+        query = mock_cursor.execute.call_args.args[0]
+        assert "FROM\n            build_runs b" in query
+        assert "b.kci_id as build_id" in query
+        assert "b.id = inc.build_run_id" in query

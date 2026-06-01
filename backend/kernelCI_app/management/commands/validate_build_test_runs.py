@@ -47,9 +47,9 @@ class Command(BaseCommand):
             SELECT
                 COUNT(*) AS legacy_builds,
                 (SELECT COUNT(*) FROM build_runs) AS build_runs,
-                COUNT(*) FILTER (WHERE build_runs.id IS NULL) AS missing_runs,
+                COUNT(*) FILTER (WHERE build_runs.kci_id IS NULL) AS missing_runs,
                 COUNT(*) FILTER (
-                    WHERE build_runs.id IS NOT NULL
+                    WHERE build_runs.kci_id IS NOT NULL
                         AND NOT (
                             build_runs.checkout_id = builds.checkout_id
                             AND build_definitions.checkout_id = builds.checkout_id
@@ -57,7 +57,7 @@ class Command(BaseCommand):
                         )
                 ) AS mismatched_runs
             FROM builds
-            LEFT JOIN build_runs ON build_runs.id = builds.id
+            LEFT JOIN build_runs ON build_runs.kci_id = builds.id
             LEFT JOIN build_definitions
                 ON build_definitions.id = build_runs.build_definition_id
             """
@@ -69,15 +69,15 @@ class Command(BaseCommand):
                 builds.id AS legacy_id,
                 builds.checkout_id AS legacy_checkout_id,
                 builds.series AS legacy_series,
-                build_runs.id AS run_id,
+                build_runs.kci_id AS run_kci_id,
                 build_runs.checkout_id AS run_checkout_id,
                 build_definitions.checkout_id AS definition_checkout_id,
                 build_definitions.series AS definition_series
             FROM builds
-            LEFT JOIN build_runs ON build_runs.id = builds.id
+            LEFT JOIN build_runs ON build_runs.kci_id = builds.id
             LEFT JOIN build_definitions
                 ON build_definitions.id = build_runs.build_definition_id
-            WHERE build_runs.id IS NULL
+            WHERE build_runs.kci_id IS NULL
                 OR NOT (
                     build_runs.checkout_id = builds.checkout_id
                     AND build_definitions.checkout_id = builds.checkout_id
@@ -96,12 +96,17 @@ class Command(BaseCommand):
             """
             SELECT
                 COUNT(*) AS legacy_tests,
+                COUNT(*) FILTER (WHERE build_runs.kci_id IS NOT NULL) AS eligible_tests,
+                COUNT(*) FILTER (WHERE build_runs.kci_id IS NULL) AS orphan_tests,
                 (SELECT COUNT(*) FROM test_runs) AS test_runs,
-                COUNT(*) FILTER (WHERE test_runs.id IS NULL) AS missing_runs,
                 COUNT(*) FILTER (
-                    WHERE test_runs.id IS NOT NULL
+                    WHERE build_runs.kci_id IS NOT NULL
+                        AND test_runs.kci_id IS NULL
+                ) AS missing_runs,
+                COUNT(*) FILTER (
+                    WHERE test_runs.kci_id IS NOT NULL
                         AND NOT (
-                            test_runs.build_run_id = tests.build_id
+                            test_runs.build_run_id = build_runs.id
                             AND test_definitions.path IS NOT DISTINCT FROM tests.path
                             AND test_definitions.number_prefix IS NOT DISTINCT FROM
                                 tests.number_prefix
@@ -110,7 +115,8 @@ class Command(BaseCommand):
                         )
                 ) AS mismatched_runs
             FROM tests
-            LEFT JOIN test_runs ON test_runs.id = tests.id
+            LEFT JOIN build_runs ON build_runs.kci_id = tests.build_id
+            LEFT JOIN test_runs ON test_runs.kci_id = tests.id
             LEFT JOIN test_definitions
                 ON test_definitions.id = test_runs.test_definition_id
             """
@@ -122,21 +128,25 @@ class Command(BaseCommand):
                 tests.id AS legacy_id,
                 tests.build_id AS legacy_build_id,
                 tests.path AS legacy_path,
-                test_runs.id AS run_id,
+                test_runs.kci_id AS run_kci_id,
                 test_runs.build_run_id AS run_build_id,
                 test_definitions.path AS definition_path
             FROM tests
-            LEFT JOIN test_runs ON test_runs.id = tests.id
+            LEFT JOIN build_runs ON build_runs.kci_id = tests.build_id
+            LEFT JOIN test_runs ON test_runs.kci_id = tests.id
             LEFT JOIN test_definitions
                 ON test_definitions.id = test_runs.test_definition_id
-            WHERE test_runs.id IS NULL
-                OR NOT (
-                    test_runs.build_run_id = tests.build_id
-                    AND test_definitions.path IS NOT DISTINCT FROM tests.path
-                    AND test_definitions.number_prefix IS NOT DISTINCT FROM
-                        tests.number_prefix
-                    AND test_definitions.number_unit IS NOT DISTINCT FROM
-                        tests.number_unit
+            WHERE build_runs.kci_id IS NOT NULL
+                AND (
+                    test_runs.kci_id IS NULL
+                    OR NOT (
+                        test_runs.build_run_id = build_runs.id
+                        AND test_definitions.path IS NOT DISTINCT FROM tests.path
+                        AND test_definitions.number_prefix IS NOT DISTINCT FROM
+                            tests.number_prefix
+                        AND test_definitions.number_unit IS NOT DISTINCT FROM
+                            tests.number_unit
+                    )
                 )
             ORDER BY tests.id
             LIMIT %s
@@ -150,21 +160,41 @@ class Command(BaseCommand):
         summary = self._fetch_one(
             """
             SELECT
-                COUNT(*) FILTER (WHERE build_id IS NOT NULL) AS build_incidents,
+                COUNT(*) FILTER (WHERE incidents.build_id IS NOT NULL) AS build_incidents,
                 COUNT(*) FILTER (
-                    WHERE build_id IS NOT NULL AND build_run_id IS NOT NULL
+                    WHERE incidents.build_id IS NOT NULL AND build_runs.kci_id IS NOT NULL
+                ) AS eligible_build_incidents,
+                COUNT(*) FILTER (
+                    WHERE incidents.build_id IS NOT NULL
+                        AND incidents.build_run_id = build_runs.id
                 ) AS linked_build_incidents,
                 COUNT(*) FILTER (
-                    WHERE build_id IS NOT NULL AND build_run_id IS NULL
+                    WHERE incidents.build_id IS NOT NULL
+                        AND incidents.build_run_id IS DISTINCT FROM build_runs.id
+                        AND build_runs.kci_id IS NOT NULL
                 ) AS missing_build_run_links,
-                COUNT(*) FILTER (WHERE test_id IS NOT NULL) AS test_incidents,
                 COUNT(*) FILTER (
-                    WHERE test_id IS NOT NULL AND test_run_id IS NOT NULL
+                    WHERE incidents.build_id IS NOT NULL AND build_runs.kci_id IS NULL
+                ) AS orphan_build_incidents,
+                COUNT(*) FILTER (WHERE incidents.test_id IS NOT NULL) AS test_incidents,
+                COUNT(*) FILTER (
+                    WHERE incidents.test_id IS NOT NULL AND test_runs.kci_id IS NOT NULL
+                ) AS eligible_test_incidents,
+                COUNT(*) FILTER (
+                    WHERE incidents.test_id IS NOT NULL
+                        AND incidents.test_run_id = test_runs.id
                 ) AS linked_test_incidents,
                 COUNT(*) FILTER (
-                    WHERE test_id IS NOT NULL AND test_run_id IS NULL
-                ) AS missing_test_run_links
+                    WHERE incidents.test_id IS NOT NULL
+                        AND incidents.test_run_id IS DISTINCT FROM test_runs.id
+                        AND test_runs.kci_id IS NOT NULL
+                ) AS missing_test_run_links,
+                COUNT(*) FILTER (
+                    WHERE incidents.test_id IS NOT NULL AND test_runs.kci_id IS NULL
+                ) AS orphan_test_incidents
             FROM incidents
+            LEFT JOIN build_runs ON build_runs.kci_id = incidents.build_id
+            LEFT JOIN test_runs ON test_runs.kci_id = incidents.test_id
             """
         )
         self._print_summary("incidents", summary)

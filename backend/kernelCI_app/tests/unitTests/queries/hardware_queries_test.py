@@ -1,11 +1,15 @@
 from datetime import datetime
 from unittest.mock import patch
 
+from django.test import override_settings
+
 from kernelCI_app.queries.hardware import (
     _generate_query_params,
     get_hardware_commit_history,
     get_hardware_details_data,
+    get_hardware_details_summary,
     get_hardware_listing_data,
+    get_hardware_summary_data,
     get_hardware_trees_data,
     query_records,
 )
@@ -36,6 +40,25 @@ class TestGetHardwareListingData:
 
         assert result == expected_result
         mock_cursor.execute.assert_called_once()
+
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.hardware.connection")
+    def test_get_hardware_listing_data_runs_read_path(self, mock_connection):
+        mock_cursor = setup_mock_cursor(mock_connection)
+        mock_cursor.fetchall.return_value = []
+
+        get_hardware_listing_data(
+            start_date=datetime(2025, 11, 10),
+            end_date=datetime(2025, 11, 12),
+            origin="maestro",
+        )
+
+        query = mock_cursor.execute.call_args.args[0]
+        assert "test_runs AS tests" in query
+        assert "build_runs b" in query
+        assert "tests.platform IS NOT NULL" in query
+        assert "tests.is_boot" in query
+        assert "environment_misc\" ->> 'platform'" not in query
 
 
 class TestGetHardwareDetailsData:
@@ -221,3 +244,90 @@ class TestQueryRecords:
 
         assert result == expected_result
         mock_cursor.execute.assert_called_once()
+
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.hardware.dict_fetchall")
+    @patch("kernelCI_app.queries.hardware.connection")
+    def test_query_records_runs_read_path(self, mock_connection, mock_dict_fetchall):
+        mock_dict_fetchall.return_value = []
+        mock_cursor = setup_mock_cursor(mock_connection)
+
+        query_records(
+            hardware_id="hardware",
+            origin="maestro",
+            trees=[TEST_TREE],
+            start_date=START_DATE,
+            end_date=END_DATE,
+        )
+
+        query = mock_cursor.execute.call_args.args[0]
+        assert "test_runs AS tests" in query
+        assert "build_runs AS builds" in query
+        assert "tests.kci_id AS id" in query
+        assert "builds.kci_id AS build_id" in query
+        assert "tests.id = incidents.test_run_id" in query
+        assert "builds.id = T7.build_run_id" in query
+        assert "tests.platform = %s" in query
+
+
+class TestGetHardwareDetailsSummary:
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.hardware.get_query_cache")
+    @patch("kernelCI_app.queries.hardware.set_query_cache")
+    @patch("kernelCI_app.queries.hardware.dict_fetchall")
+    @patch("kernelCI_app.queries.hardware.connection")
+    def test_get_hardware_details_summary_runs_read_path(
+        self,
+        mock_connection,
+        mock_dict_fetchall,
+        mock_set_cache,
+        mock_get_cache,
+    ):
+        mock_get_cache.return_value = None
+        mock_dict_fetchall.return_value = []
+        mock_cursor = setup_mock_cursor(mock_connection)
+
+        get_hardware_details_summary(
+            hardware_id="hardware",
+            origin="maestro",
+            commit_hashes=["abc123"],
+            start_datetime=START_DATE,
+            end_datetime=END_DATE,
+        )
+
+        query = mock_cursor.execute.call_args.args[0]
+        assert "build_runs AS builds" in query
+        assert "test_runs AS tests" in query
+        assert "build_groups AS MATERIALIZED" in query
+        assert "test_groups AS MATERIALIZED" in query
+        assert "test_groups.platform AS platform" in query
+        assert "test_groups.is_boot" in query
+        assert "incidents.build_run_id" in query
+        assert "incidents.test_run_id" in query
+        assert "environment_misc->>'platform'" not in query
+        mock_set_cache.assert_called_once()
+
+
+class TestGetHardwareSummaryData:
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.hardware.dict_fetchall")
+    @patch("kernelCI_app.queries.hardware.connection")
+    def test_get_hardware_summary_data_runs_read_path(
+        self, mock_connection, mock_dict_fetchall
+    ):
+        mock_dict_fetchall.return_value = []
+        mock_cursor = setup_mock_cursor(mock_connection)
+
+        get_hardware_summary_data(
+            keys=[("hardware", "maestro")],
+            start_date=START_DATE,
+            end_date=END_DATE,
+            labs_by_key={("hardware", "maestro"): {"lab-a"}},
+        )
+
+        query = mock_cursor.execute.call_args.args[0]
+        assert "test_runs AS tests" in query
+        assert "build_runs AS builds" in query
+        assert "tests.kci_id AS id" in query
+        assert "builds.kci_id AS build_id" in query
+        assert "tests.platform = key_list.hardware_id" in query

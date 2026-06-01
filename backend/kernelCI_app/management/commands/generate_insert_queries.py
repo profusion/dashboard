@@ -8,6 +8,7 @@ from kernelCI_app.typeModels.modelTypes import MODEL_MAP
 
 CONFLICT_TARGETS = {
     "build_definitions": ("checkout_id", "series"),
+    "build_runs": ("kci_id",),
     "commits": (
         "tree_name",
         "git_repository_url",
@@ -20,6 +21,7 @@ CONFLICT_TARGETS = {
         "number_prefix",
         "number_unit",
     ),
+    "test_runs": ("kci_id",),
 }
 
 
@@ -46,7 +48,11 @@ class Command(BaseCommand):
             query_params_properties: list[tuple[str, str]] = []
 
             for field in model._meta.fields:
-                if field.generated or (field.auto_created and field.primary_key):
+                if field.generated or (
+                    field.primary_key
+                    and field.get_internal_type()
+                    in {"AutoField", "BigAutoField", "SmallAutoField"}
+                ):
                     continue
 
                 field_name = (

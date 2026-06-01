@@ -1,5 +1,6 @@
 import sys
 
+from django.conf import settings
 from django.db import connection, connections
 from pydantic import ValidationError
 
@@ -12,6 +13,10 @@ from kernelCI_app.typeModels.metrics_notifications import (
     MetricsReportData,
     TopIssue,
 )
+
+
+def _use_runs_read_path() -> bool:
+    return settings.DB_SCHEMA_REFACTOR_READ_PATH == "runs"
 
 
 def kcidb_execute_query(query, params=None):
@@ -37,6 +42,8 @@ def kcidb_execute_query(query, params=None):
 
 def kcidb_new_issues():
     """Fetch issues from the last few days, including related checkouts."""
+    if _use_runs_read_path():
+        return _kcidb_new_issues_from_runs()
 
     params = {"interval": "1 hour"}
 
@@ -167,9 +174,142 @@ def kcidb_new_issues():
     return kcidb_execute_query(query, params)
 
 
+def _kcidb_new_issues_from_runs():
+    params = {"interval": "1 hour"}
+
+    query = """
+        WITH ranked_issues AS (
+        SELECT
+            i._timestamp,
+            i.id,
+            i.version,
+            i.comment,
+            i.misc,
+            i.origin,
+            ROW_NUMBER() OVER (PARTITION BY i.id ORDER BY i.version DESC) AS rn
+        FROM
+            public.issues i
+        WHERE i._timestamp >= NOW() - INTERVAL %(interval)s
+        ),
+
+        highest_version AS (
+        SELECT
+            _timestamp,
+            id,
+            version,
+            comment,
+            misc,
+            origin
+        FROM
+            ranked_issues
+        WHERE
+            rn = 1
+        ),
+
+        older_issues AS (
+        SELECT
+            h._timestamp,
+            h.id,
+            h.version,
+            h.comment,
+            h.misc,
+            h.origin
+        FROM highest_version h
+        LEFT JOIN incidents inc
+            ON h.id = inc.issue_id
+        WHERE inc._timestamp < NOW() - INTERVAL %(interval)s
+        ),
+
+        new_issues AS (
+            SELECT * FROM highest_version
+            EXCEPT
+            SELECT * FROM older_issues
+        ),
+
+        first_incidents AS (
+           SELECT
+               inc._timestamp,
+               inc.issue_id,
+               inc.issue_version,
+               inc.test_id,
+               b.kci_id AS build_id,
+               c.git_repository_url,
+               c.tree_name,
+               c.git_repository_branch,
+               c.git_commit_hash,
+               c.git_commit_name,
+               ROW_NUMBER() OVER (PARTITION BY inc.issue_id ORDER BY inc._timestamp ASC) as incident_rn
+           FROM incidents inc
+           JOIN build_runs b ON inc.build_run_id = b.id
+           JOIN checkouts c ON b.checkout_id = c.id
+           WHERE inc._timestamp >= NOW() - INTERVAL %(interval)s
+
+           UNION
+
+           SELECT
+               inc._timestamp,
+               inc.issue_id,
+               inc.issue_version,
+               t.kci_id AS test_id,
+               b.kci_id AS build_id,
+               c.git_repository_url,
+               c.tree_name,
+               c.git_repository_branch,
+               c.git_commit_hash,
+               c.git_commit_name,
+               ROW_NUMBER() OVER (PARTITION BY inc.issue_id ORDER BY inc._timestamp ASC) as incident_rn
+           FROM incidents inc
+           JOIN test_runs t ON inc.test_run_id = t.id
+           JOIN test_definitions td ON t.test_definition_id = td.id
+           JOIN build_runs b ON t.build_run_id = b.id
+           JOIN checkouts c ON b.checkout_id = c.id
+           WHERE inc._timestamp >= NOW() - INTERVAL %(interval)s
+            AND (td.path = 'boot' OR td.path = 'boot.nfs')
+       )
+
+        SELECT
+            fi._timestamp,
+            n.id,
+            n.version,
+            n.comment,
+            n.origin,
+            fi.build_id,
+            fi.test_id,
+            n.misc,
+            fi.git_repository_url,
+            fi.tree_name,
+            fi.git_repository_branch,
+            fi.git_commit_hash,
+            fi.git_commit_name,
+            COUNT(inc.id) AS incident_count
+        FROM new_issues n
+        LEFT JOIN first_incidents fi ON n.id = fi.issue_id AND fi.incident_rn = 1
+        LEFT JOIN incidents inc ON n.id = inc.issue_id
+        GROUP BY
+            fi._timestamp,
+            n.id,
+            n.version,
+            n.comment,
+            n.origin,
+            fi.build_id,
+            fi.test_id,
+            n.misc,
+            fi.git_repository_url,
+            fi.tree_name,
+            fi.git_repository_branch,
+            fi.git_commit_hash,
+            fi.git_commit_name
+        ORDER BY fi._timestamp DESC;
+        """
+
+    return kcidb_execute_query(query, params)
+
+
 # TODO: include issue version as an optional parameter
 def kcidb_issue_details(issue_id):
     """Fetches details of a given issue."""
+    if _use_runs_read_path():
+        return _kcidb_issue_details_from_runs(issue_id)
 
     params = {"issue_id": issue_id}
 
@@ -257,8 +397,97 @@ def kcidb_issue_details(issue_id):
     return kcidb_execute_query(query, params)
 
 
+def _kcidb_issue_details_from_runs(issue_id):
+    params = {"issue_id": issue_id}
+
+    query = """
+        WITH our_issue AS (
+            SELECT *
+            FROM issues
+            WHERE id = %(issue_id)s
+            ORDER BY version DESC
+            LIMIT 1
+        ),
+        first_incidents AS (
+           SELECT
+               inc.issue_id,
+               inc.issue_version,
+               inc.test_id,
+               b.kci_id AS build_id,
+               c.git_repository_url,
+               c.tree_name,
+               c.git_repository_branch,
+               c.git_commit_hash,
+               c.git_commit_name,
+               c.git_commit_tags,
+               ROW_NUMBER() OVER (PARTITION BY inc.issue_id ORDER BY inc._timestamp ASC) as incident_rn
+           FROM incidents inc
+           JOIN build_runs b ON inc.build_run_id = b.id
+           JOIN checkouts c ON b.checkout_id = c.id
+           WHERE inc.issue_id = %(issue_id)s
+
+           UNION
+
+           SELECT
+               inc.issue_id,
+               inc.issue_version,
+               t.kci_id AS test_id,
+               b.kci_id AS build_id,
+               c.git_repository_url,
+               c.tree_name,
+               c.git_repository_branch,
+               c.git_commit_hash,
+               c.git_commit_name,
+               c.git_commit_tags,
+               ROW_NUMBER() OVER (PARTITION BY inc.issue_id ORDER BY inc._timestamp ASC) as incident_rn
+           FROM incidents inc
+           JOIN test_runs t ON inc.test_run_id = t.id
+           JOIN build_runs b ON t.build_run_id = b.id
+           JOIN checkouts c ON b.checkout_id = c.id
+           WHERE inc.issue_id = %(issue_id)s
+       )
+
+        SELECT
+            n._timestamp,
+            n.id,
+            n.version,
+            n.comment,
+            fi.build_id,
+            fi.test_id,
+            n.misc,
+            fi.git_repository_url,
+            fi.tree_name,
+            fi.git_repository_branch,
+            fi.git_commit_hash,
+            fi.git_commit_name,
+            fi.git_commit_tags,
+            COUNT(inc.id) AS incident_count
+        FROM our_issue n
+        LEFT JOIN first_incidents fi ON n.id = fi.issue_id AND fi.incident_rn = 1
+        LEFT JOIN incidents inc ON n.id = inc.issue_id
+        GROUP BY
+            n._timestamp,
+            n.id,
+            n.version,
+            n.comment,
+            fi.build_id,
+            fi.test_id,
+            n.misc,
+            fi.git_repository_url,
+            fi.tree_name,
+            fi.git_repository_branch,
+            fi.git_commit_hash,
+            fi.git_commit_name,
+            fi.git_commit_tags
+    """
+
+    return kcidb_execute_query(query, params)
+
+
 def kcidb_build_incidents(issue_id):
     """Fetches build incidents of a given issue."""
+    if _use_runs_read_path():
+        return _kcidb_build_incidents_from_runs(issue_id)
 
     params = {"issue_id": issue_id}
 
@@ -278,8 +507,30 @@ def kcidb_build_incidents(issue_id):
     return kcidb_execute_query(query, params)
 
 
+def _kcidb_build_incidents_from_runs(issue_id):
+    params = {"issue_id": issue_id}
+
+    query = """
+        SELECT DISTINCT ON (bd.config_name, bd.architecture, bd.compiler)
+            b.kci_id AS id,
+            bd.config_name,
+            b.config_url,
+            bd.architecture,
+            bd.compiler
+        FROM build_runs b
+            JOIN build_definitions bd ON b.build_definition_id = bd.id
+            LEFT JOIN incidents inc ON inc.build_run_id = b.id
+        WHERE inc.issue_id = %(issue_id)s
+        ORDER BY bd.config_name, bd.architecture, bd.compiler, b._timestamp DESC;
+    """
+
+    return kcidb_execute_query(query, params)
+
+
 def kcidb_test_incidents(issue_id):
     """Fetches test incidents of a given issue."""
+    if _use_runs_read_path():
+        return _kcidb_test_incidents_from_runs(issue_id)
 
     params = {"issue_id": issue_id}
 
@@ -320,8 +571,51 @@ def kcidb_test_incidents(issue_id):
     return kcidb_execute_query(query, params)
 
 
+def _kcidb_test_incidents_from_runs(issue_id):
+    params = {"issue_id": issue_id}
+
+    query = """
+        WITH ranked_tests AS (
+            SELECT
+                t.kci_id AS id,
+                t._timestamp,
+                td.path,
+                t.environment_compatible,
+                t.platform,
+                COUNT(*) OVER (PARTITION BY t.platform) AS platform_count,
+                ROW_NUMBER() OVER
+                    (PARTITION BY t.platform ORDER BY t._timestamp ASC) AS rn_oldest
+            FROM test_runs t
+            JOIN test_definitions td ON t.test_definition_id = td.id
+            LEFT JOIN incidents inc ON inc.test_run_id = t.id
+            WHERE inc.issue_id = %(issue_id)s
+                 AND (td.path = 'boot' OR td.path = 'boot.nfs')
+        ),
+
+        oldest_timestamps AS (
+            SELECT
+                platform,
+                _timestamp AS oldest_timestamp
+            FROM ranked_tests
+            WHERE rn_oldest = 1
+        )
+
+        SELECT DISTINCT ON (platform)
+            rt.*,
+            ot.oldest_timestamp
+        FROM ranked_tests rt
+        JOIN (SELECT platform, platform_count from ranked_tests) pc ON rt.platform = pc.platform
+        JOIN oldest_timestamps ot ON rt.platform = ot.platform
+        ORDER BY platform, _timestamp DESC;
+    """
+
+    return kcidb_execute_query(query, params)
+
+
 def kcidb_last_test_without_issue(issue, incident):
     """Fetches build incidents of a given issue."""
+    if _use_runs_read_path():
+        return _kcidb_last_test_without_issue_from_runs(issue, incident)
 
     params = {
         "origin": "maestro",
@@ -351,6 +645,50 @@ def kcidb_last_test_without_issue(issue, incident):
         AND c.git_repository_branch = %(branch)s
         AND t.environment_misc->>'platform' = %(platform)s
         AND t.path = %(path)s
+        AND t.status = 'PASS'
+        AND c.origin = %(origin)s
+        AND t._timestamp >= NOW() - INTERVAL %(interval)s
+        AND c.git_commit_hash NOT IN
+            (
+                SELECT git_commit_hash FROM tests_with_issue
+            )
+        ORDER BY b.start_time DESC
+        LIMIT 1;
+    """
+
+    return kcidb_execute_query(query, params)
+
+
+def _kcidb_last_test_without_issue_from_runs(issue, incident):
+    params = {
+        "origin": "maestro",
+        "issue_id": issue["id"],
+        "path": incident["path"],
+        "platform": incident["platform"],
+        "timestamp": incident["oldest_timestamp"],
+        "giturl": issue["git_repository_url"],
+        "branch": issue["git_repository_branch"],
+        "interval": "18 days",
+    }
+
+    query = """
+    WITH tests_with_issue AS (
+        SELECT DISTINCT c.git_commit_hash
+        FROM test_runs t
+        JOIN build_runs b ON t.build_run_id = b.id
+        JOIN checkouts c ON b.checkout_id = c.id
+        JOIN incidents inc ON inc.test_run_id = t.id
+        WHERE inc.issue_id = %(issue_id)s
+     )
+    SELECT t.kci_id AS id, t.start_time, c.git_commit_hash
+        FROM test_runs t
+        JOIN test_definitions td ON t.test_definition_id = td.id
+        JOIN build_runs b ON t.build_run_id = b.id
+        JOIN checkouts c ON b.checkout_id = c.id
+        WHERE c.git_repository_url = %(giturl)s
+        AND c.git_repository_branch = %(branch)s
+        AND t.platform = %(platform)s
+        AND td.path = %(path)s
         AND t.status = 'PASS'
         AND c.origin = %(origin)s
         AND t._timestamp >= NOW() - INTERVAL %(interval)s
@@ -489,6 +827,16 @@ def kcidb_tests_results(
         interval: Time interval for filtering (such as '7 days' or '12 hours')
         group_size: Maximum number of tests to return per group
     """
+    if _use_runs_read_path():
+        return _kcidb_tests_results_from_runs(
+            origin=origin,
+            giturl=giturl,
+            branch=branch,
+            hash=hash,
+            paths=paths,
+            interval=interval,
+            group_size=group_size,
+        )
 
     path_params = {}
     if not paths:
@@ -610,9 +958,138 @@ def kcidb_tests_results(
         return dict_fetchall(cursor=cursor)
 
 
+def _kcidb_tests_results_from_runs(
+    *,
+    origin: str,
+    giturl: str,
+    branch: str,
+    hash: str,
+    paths: list[str],
+    interval: str,
+    group_size: int,
+):
+    path_params = {}
+    if not paths:
+        path_clause = ""
+    elif len(paths) == 1:
+        path_clause = "AND td.path LIKE %(path)s"
+        path_params["path"] = paths[0]
+    else:
+        path_clause_keys = []
+        for idx, path in enumerate(paths):
+            query_key = f"path_{idx}"
+            path_params[query_key] = path
+            path_clause_keys.append(f"%({query_key})s")
+        path_clause_keys_full = " OR td.path LIKE ".join(path_clause_keys)
+
+        path_clause = "AND (td.path LIKE " + path_clause_keys_full + ")"
+
+    params = {
+        "origin": origin,
+        "giturl": giturl,
+        "branch": branch,
+        "hash": hash,
+        "interval": interval,
+        "group_size": group_size,
+        **path_params,
+    }
+
+    query = f"""
+        WITH
+            prefiltered_data AS (
+                SELECT
+                    t.kci_id AS id,
+                    td.path,
+                    t.status,
+                    t.start_time,
+                    t.platform AS platform,
+                    bd.architecture,
+                    bd.compiler,
+                    bd.config_name,
+                    c.git_commit_hash
+                FROM test_runs t
+                    JOIN test_definitions td ON t.test_definition_id = td.id
+                    JOIN build_runs b ON t.build_run_id = b.id
+                    JOIN build_definitions bd ON b.build_definition_id = bd.id
+                    JOIN checkouts c ON b.checkout_id = c.id
+                WHERE t.origin = %(origin)s
+                    AND c.git_repository_url = %(giturl)s
+                    AND c.git_repository_branch = %(branch)s
+                    {path_clause}
+                    AND t.platform != 'kubernetes'
+                    AND C.start_time <= (
+                        SELECT
+                            MAX(start_time)
+                        FROM
+                            checkouts
+                        WHERE
+                            git_commit_hash = %(hash)s
+                    )
+                    AND c.start_time >= NOW() - INTERVAL %(interval)s
+                    AND b.start_time >= NOW() - INTERVAL %(interval)s
+                    AND t.start_time >= NOW() - INTERVAL %(interval)s
+            ),
+            ranked_data AS (
+                SELECT
+                    *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY
+                            path,
+                            platform,
+                            config_name,
+                            architecture,
+                            compiler
+                        ORDER BY
+                            start_time DESC NULLS LAST
+                    ) AS rn,
+                    FIRST_VALUE(git_commit_hash) OVER (
+                        PARTITION BY
+                            path,
+                            platform,
+                            config_name,
+                            architecture,
+                            compiler
+                        ORDER BY
+                            start_time DESC NULLS LAST
+                    ) AS first_hash_by_group
+                FROM
+                    prefiltered_data
+            )
+        SELECT
+            id,
+            path,
+            status,
+            start_time,
+            platform,
+            architecture,
+            compiler,
+            config_name,
+            git_commit_hash,
+            rn
+        FROM
+            ranked_data
+        WHERE
+            rn <= %(group_size)s
+            AND first_hash_by_group = %(hash)s
+        ORDER BY
+            path,
+            platform,
+            config_name,
+            architecture,
+            compiler,
+            start_time DESC NULLS LAST;
+        """
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        return dict_fetchall(cursor=cursor)
+
+
 def get_issues_summary_data(*, checkout_ids: list[str]) -> list[dict]:
     if not checkout_ids:
         return []
+    if _use_runs_read_path():
+        return _get_issues_summary_data_from_runs(checkout_ids=checkout_ids)
 
     query = f"""
         SELECT DISTINCT
@@ -630,6 +1107,35 @@ def get_issues_summary_data(*, checkout_ids: list[str]) -> list[dict]:
             builds b
         LEFT JOIN incidents inc
             ON b.id = inc.build_id
+        LEFT JOIN issues i
+            ON inc.issue_id = i.id AND inc.issue_version = i.version
+        WHERE
+            b.checkout_id IN ({", ".join(["%s"] * len(checkout_ids))}) and b.status = 'FAIL'
+        ORDER BY issue_id
+    """
+
+    with connections["default"].cursor() as cursor:
+        cursor.execute(query, checkout_ids)
+        return dict_fetchall(cursor=cursor)
+
+
+def _get_issues_summary_data_from_runs(*, checkout_ids: list[str]) -> list[dict]:
+    query = f"""
+        SELECT DISTINCT
+            b.checkout_id,
+            b.kci_id as build_id,
+            inc.issue_id,
+            inc.issue_version,
+            i.report_url,
+            i.culprit_code,
+            i.culprit_tool,
+            i.culprit_harness,
+            i.origin,
+            i.comment
+        FROM
+            build_runs b
+        LEFT JOIN incidents inc
+            ON b.id = inc.build_run_id
         LEFT JOIN issues i
             ON inc.issue_id = i.id AND inc.issue_version = i.version
         WHERE

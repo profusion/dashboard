@@ -23,22 +23,32 @@ def _use_runs_read_path() -> bool:
     return settings.DB_SCHEMA_REFACTOR_READ_PATH == "runs"
 
 
-def _get_tree_listing_count_clause(test_path_expression: str = "tests.path") -> str:
-    build_count_clause = """
-        COUNT(DISTINCT CASE WHEN (builds.status = 'PASS' AND builds.id NOT LIKE 'maestro:dummy_%%')
-            THEN builds.id END) AS pass_builds,
-        COUNT(DISTINCT CASE WHEN (builds.status = 'FAIL' AND builds.id NOT LIKE 'maestro:dummy_%%')
-            THEN builds.id END) AS fail_builds,
-        COUNT(DISTINCT CASE WHEN (builds.status IS NULL AND builds.id IS NOT NULL
-            AND builds.id NOT LIKE 'maestro:dummy_%%') THEN builds.id END) AS null_builds,
-        COUNT(DISTINCT CASE WHEN (builds.status = 'ERROR' AND builds.id NOT LIKE 'maestro:dummy_%%')
-            THEN builds.id END) AS error_builds,
-        COUNT(DISTINCT CASE WHEN (builds.status = 'MISS' AND builds.id NOT LIKE 'maestro:dummy_%%')
-            THEN builds.id END) AS miss_builds,
-        COUNT(DISTINCT CASE WHEN (builds.status = 'DONE' AND builds.id NOT LIKE 'maestro:dummy_%%')
-            THEN builds.id END) AS done_builds,
-        COUNT(DISTINCT CASE WHEN (builds.status = 'SKIP' AND builds.id NOT LIKE 'maestro:dummy_%%')
-            THEN builds.id END) AS skip_builds,
+def _get_tree_listing_count_clause(
+    test_path_expression: str = "tests.path",
+    build_kci_id_expression: str = "builds.id",
+) -> str:
+    build_count_clause = f"""
+        COUNT(DISTINCT CASE WHEN (builds.status = 'PASS'
+            AND {build_kci_id_expression} NOT LIKE 'maestro:dummy_%%')
+            THEN {build_kci_id_expression} END) AS pass_builds,
+        COUNT(DISTINCT CASE WHEN (builds.status = 'FAIL'
+            AND {build_kci_id_expression} NOT LIKE 'maestro:dummy_%%')
+            THEN {build_kci_id_expression} END) AS fail_builds,
+        COUNT(DISTINCT CASE WHEN (builds.status IS NULL AND {build_kci_id_expression} IS NOT NULL
+            AND {build_kci_id_expression} NOT LIKE 'maestro:dummy_%%')
+            THEN {build_kci_id_expression} END) AS null_builds,
+        COUNT(DISTINCT CASE WHEN (builds.status = 'ERROR'
+            AND {build_kci_id_expression} NOT LIKE 'maestro:dummy_%%')
+            THEN {build_kci_id_expression} END) AS error_builds,
+        COUNT(DISTINCT CASE WHEN (builds.status = 'MISS'
+            AND {build_kci_id_expression} NOT LIKE 'maestro:dummy_%%')
+            THEN {build_kci_id_expression} END) AS miss_builds,
+        COUNT(DISTINCT CASE WHEN (builds.status = 'DONE'
+            AND {build_kci_id_expression} NOT LIKE 'maestro:dummy_%%')
+            THEN {build_kci_id_expression} END) AS done_builds,
+        COUNT(DISTINCT CASE WHEN (builds.status = 'SKIP'
+            AND {build_kci_id_expression} NOT LIKE 'maestro:dummy_%%')
+            THEN {build_kci_id_expression} END) AS skip_builds,
     """
 
     test_count_clause = f"""
@@ -76,6 +86,177 @@ def _get_tree_listing_count_clause(test_path_expression: str = "tests.path") -> 
     """
 
     return build_count_clause + test_count_clause + boot_count_clause
+
+
+def _get_runs_tree_listing_count_ctes() -> str:
+    return """
+                build_counts AS (
+                    SELECT
+                        builds.checkout_id,
+                        COUNT(*) FILTER (
+                            WHERE builds.status = 'PASS'
+                                AND builds.kci_id NOT LIKE 'maestro:dummy_%%'
+                        ) AS pass_builds,
+                        COUNT(*) FILTER (
+                            WHERE builds.status = 'FAIL'
+                                AND builds.kci_id NOT LIKE 'maestro:dummy_%%'
+                        ) AS fail_builds,
+                        COUNT(*) FILTER (
+                            WHERE builds.status IS NULL
+                                AND builds.kci_id NOT LIKE 'maestro:dummy_%%'
+                        ) AS null_builds,
+                        COUNT(*) FILTER (
+                            WHERE builds.status = 'ERROR'
+                                AND builds.kci_id NOT LIKE 'maestro:dummy_%%'
+                        ) AS error_builds,
+                        COUNT(*) FILTER (
+                            WHERE builds.status = 'MISS'
+                                AND builds.kci_id NOT LIKE 'maestro:dummy_%%'
+                        ) AS miss_builds,
+                        COUNT(*) FILTER (
+                            WHERE builds.status = 'DONE'
+                                AND builds.kci_id NOT LIKE 'maestro:dummy_%%'
+                        ) AS done_builds,
+                        COUNT(*) FILTER (
+                            WHERE builds.status = 'SKIP'
+                                AND builds.kci_id NOT LIKE 'maestro:dummy_%%'
+                        ) AS skip_builds
+                    FROM build_runs AS builds
+                    JOIN selected_checkouts
+                        ON selected_checkouts.id = builds.checkout_id
+                    GROUP BY builds.checkout_id
+                ),
+                test_counts AS (
+                    SELECT
+                        builds.checkout_id,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = FALSE AND tests.status = 'FAIL'
+                        ) AS fail_tests,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = FALSE AND tests.status = 'ERROR'
+                        ) AS error_tests,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = FALSE AND tests.status = 'MISS'
+                        ) AS miss_tests,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = FALSE AND tests.status = 'PASS'
+                        ) AS pass_tests,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = FALSE AND tests.status = 'DONE'
+                        ) AS done_tests,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = FALSE AND tests.status = 'SKIP'
+                        ) AS skip_tests,
+                        SUM(CASE WHEN (
+                            tests.is_boot = FALSE AND tests.status IS NULL
+                            AND tests.id IS NOT NULL
+                        ) THEN 1 ELSE 0 END) AS null_tests,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = TRUE AND tests.status = 'FAIL'
+                        ) AS fail_boots,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = TRUE AND tests.status = 'ERROR'
+                        ) AS error_boots,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = TRUE AND tests.status = 'MISS'
+                        ) AS miss_boots,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = TRUE AND tests.status = 'PASS'
+                        ) AS pass_boots,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = TRUE AND tests.status = 'DONE'
+                        ) AS done_boots,
+                        COUNT(*) FILTER (
+                            WHERE tests.is_boot = TRUE AND tests.status = 'SKIP'
+                        ) AS skip_boots,
+                        SUM(CASE WHEN (
+                            tests.is_boot = TRUE AND tests.status IS NULL
+                            AND tests.id IS NOT NULL
+                        ) THEN 1 ELSE 0 END) AS null_boots
+                    FROM build_runs AS builds
+                    JOIN selected_checkouts
+                        ON selected_checkouts.id = builds.checkout_id
+                    JOIN test_runs AS tests ON tests.build_run_id = builds.id
+                    GROUP BY builds.checkout_id
+                )
+    """
+
+
+def _get_runs_tree_listing_count_sum_clause() -> str:
+    count_columns = [
+        "pass_builds",
+        "fail_builds",
+        "null_builds",
+        "error_builds",
+        "miss_builds",
+        "done_builds",
+        "skip_builds",
+        "fail_tests",
+        "error_tests",
+        "miss_tests",
+        "pass_tests",
+        "done_tests",
+        "skip_tests",
+        "null_tests",
+        "fail_boots",
+        "error_boots",
+        "miss_boots",
+        "pass_boots",
+        "done_boots",
+        "skip_boots",
+        "null_boots",
+    ]
+    build_columns = {
+        "pass_builds",
+        "fail_builds",
+        "null_builds",
+        "error_builds",
+        "miss_builds",
+        "done_builds",
+        "skip_builds",
+    }
+
+    clauses = []
+    for column in count_columns:
+        table = "build_counts" if column in build_columns else "test_counts"
+        clauses.append(f"COALESCE(SUM({table}.{column}), 0)::bigint AS {column}")
+
+    return ",\n                ".join(clauses) + ","
+
+
+def _get_runs_tree_listing_count_clause() -> str:
+    build_count_clause = _get_tree_listing_count_clause(
+        build_kci_id_expression="builds.kci_id"
+    ).split("COUNT(CASE WHEN (tests.path <> 'boot'")[0]
+
+    test_columns = [
+        ("FALSE", "FAIL", "fail_tests"),
+        ("FALSE", "ERROR", "error_tests"),
+        ("FALSE", "MISS", "miss_tests"),
+        ("FALSE", "PASS", "pass_tests"),
+        ("FALSE", "DONE", "done_tests"),
+        ("FALSE", "SKIP", "skip_tests"),
+        ("TRUE", "FAIL", "fail_boots"),
+        ("TRUE", "ERROR", "error_boots"),
+        ("TRUE", "MISS", "miss_boots"),
+        ("TRUE", "PASS", "pass_boots"),
+        ("TRUE", "DONE", "done_boots"),
+        ("TRUE", "SKIP", "skip_boots"),
+    ]
+    test_count_clause = "\n".join(
+        f"""
+        COUNT(CASE WHEN tests.is_boot = {is_boot}
+            AND tests.status = '{status}' THEN 1 END) AS {alias},"""
+        for is_boot, status, alias in test_columns
+    )
+    null_count_clause = """
+        SUM(CASE WHEN tests.is_boot = FALSE
+            AND tests.status IS NULL AND tests.id IS NOT NULL THEN 1 ELSE 0 END) AS null_tests,
+        SUM(CASE WHEN tests.is_boot = TRUE
+            AND tests.status IS NULL AND tests.id IS NOT NULL THEN 1 ELSE 0 END) AS null_boots,
+    """
+
+    return build_count_clause + test_count_clause + null_count_clause
 
 
 def get_tree_listing_query(with_clause, join_clause, where_clause):
@@ -208,9 +389,8 @@ def _get_tree_listing_data_from_runs(
         "origin_param": origin,
         "interval_param": interval_in_days,
     }
-    count_clauses = _get_tree_listing_count_clause(
-        test_path_expression="test_definitions.path"
-    )
+    count_clauses = _get_runs_tree_listing_count_sum_clause()
+    count_ctes = _get_runs_tree_listing_count_ctes()
 
     query = f"""
             WITH
@@ -242,54 +422,71 @@ def _get_tree_listing_data_from_runs(
                         ORDERED_CHECKOUTS_BY_TREE
                     WHERE
                         TIME_ORDER = 1
+                ),
+                selected_checkouts AS (
+                    SELECT
+                        checkouts.id,
+                        checkouts.origin,
+                        checkouts.origin_builds_finish_time,
+                        checkouts.origin_tests_finish_time,
+                        checkouts.start_time,
+                        commits.tree_name,
+                        commits.git_repository_branch,
+                        commits.git_repository_url,
+                        commits.git_commit_hash,
+                        commits.git_commit_tags,
+                        commits.git_commit_name
+                    FROM
+                        checkouts
+                        JOIN commits ON checkouts.commit_id = commits.id
+                        JOIN FIRST_TREE_CHECKOUT FTC ON (
+                            commits.git_repository_branch IS NOT DISTINCT FROM FTC.GIT_REPOSITORY_BRANCH
+                            AND commits.git_repository_url IS NOT DISTINCT FROM FTC.GIT_REPOSITORY_URL
+                            AND commits.git_commit_hash = FTC.GIT_COMMIT_HASH
+                        )
+                    WHERE
+                        checkouts.origin = %(origin_param)s
                 )
+                ,{count_ctes}
             SELECT
-                MAX(checkouts.id) AS checkout_id,
-                commits.tree_name,
-                commits.git_repository_branch,
-                commits.git_repository_url,
-                commits.git_commit_hash,
-                checkouts.origin_builds_finish_time,
-                checkouts.origin_tests_finish_time,
+                MAX(selected_checkouts.id) AS checkout_id,
+                selected_checkouts.tree_name,
+                selected_checkouts.git_repository_branch,
+                selected_checkouts.git_repository_url,
+                selected_checkouts.git_commit_hash,
+                selected_checkouts.origin_builds_finish_time,
+                selected_checkouts.origin_tests_finish_time,
                 CASE
-                    WHEN COUNT(DISTINCT commits.git_commit_tags) > 0 THEN COALESCE(
-                        ARRAY_AGG(DISTINCT commits.git_commit_tags) FILTER (
+                    WHEN COUNT(DISTINCT selected_checkouts.git_commit_tags) > 0 THEN COALESCE(
+                        ARRAY_AGG(DISTINCT selected_checkouts.git_commit_tags) FILTER (
                             WHERE
-                                commits.git_commit_tags IS NOT NULL
-                                AND commits.git_commit_tags::TEXT <> '{"{}"}'
+                                selected_checkouts.git_commit_tags IS NOT NULL
+                                AND selected_checkouts.git_commit_tags::TEXT <> '{"{}"}'
                         ),
                         ARRAY[]::TEXT[]
                     )
                     ELSE ARRAY[]::TEXT[]
                 END AS git_commit_tags,
-                MAX(commits.git_commit_name) AS git_commit_name,
-                MAX(checkouts.start_time) AS start_time,
+                MAX(selected_checkouts.git_commit_name) AS git_commit_name,
+                MAX(selected_checkouts.start_time) AS start_time,
                 {count_clauses}
-                checkouts.origin
+                selected_checkouts.origin
             FROM
-                checkouts
-                JOIN commits ON checkouts.commit_id = commits.id
-                LEFT JOIN build_runs AS builds ON builds.checkout_id = checkouts.id
-                LEFT JOIN test_runs AS tests ON tests.build_run_id = builds.id
-                LEFT JOIN test_definitions
-                    ON test_definitions.id = tests.test_definition_id
-                JOIN FIRST_TREE_CHECKOUT FTC ON (
-                    commits.git_repository_branch IS NOT DISTINCT FROM FTC.GIT_REPOSITORY_BRANCH
-                    AND commits.git_repository_url IS NOT DISTINCT FROM FTC.GIT_REPOSITORY_URL
-                    AND commits.git_commit_hash = FTC.GIT_COMMIT_HASH
-                )
-            WHERE
-                checkouts.origin = %(origin_param)s
+                selected_checkouts
+                LEFT JOIN build_counts
+                    ON build_counts.checkout_id = selected_checkouts.id
+                LEFT JOIN test_counts
+                    ON test_counts.checkout_id = selected_checkouts.id
             GROUP BY
-                commits.git_commit_hash,
-                commits.git_repository_branch,
-                commits.git_repository_url,
-                commits.tree_name,
-                checkouts.origin_builds_finish_time,
-                checkouts.origin_tests_finish_time,
-                checkouts.origin
+                selected_checkouts.git_commit_hash,
+                selected_checkouts.git_repository_branch,
+                selected_checkouts.git_repository_url,
+                selected_checkouts.tree_name,
+                selected_checkouts.origin_builds_finish_time,
+                selected_checkouts.origin_tests_finish_time,
+                selected_checkouts.origin
             ORDER BY
-                commits.git_commit_hash
+                selected_checkouts.git_commit_hash
             """
 
     with connection.cursor() as cursor:
@@ -477,9 +674,7 @@ def get_tree_listing_data_by_checkout_id(*, checkout_ids: list[str]) -> list[dic
 def _get_tree_listing_data_by_checkout_id_from_runs(
     *, checkout_ids: list[str]
 ) -> list[dict]:
-    count_clauses = _get_tree_listing_count_clause(
-        test_path_expression="test_definitions.path"
-    )
+    count_clauses = _get_runs_tree_listing_count_clause()
 
     query = f"""
             SELECT
@@ -513,8 +708,6 @@ def _get_tree_listing_data_by_checkout_id_from_runs(
                 build_runs AS builds ON builds.checkout_id = checkouts.id
             LEFT JOIN
                 test_runs AS tests ON tests.build_run_id = builds.id
-            LEFT JOIN
-                test_definitions ON test_definitions.id = tests.test_definition_id
             WHERE
                 checkouts.id IN ({", ".join(["%s"] * len(checkout_ids))})
             GROUP BY

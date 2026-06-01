@@ -200,6 +200,7 @@ class Builds(models.Model):
 
 
 class BuildDefinitions(models.Model):
+    id = models.AutoField(primary_key=True)
     field_timestamp = models.DateTimeField(
         db_column="_timestamp", blank=True, null=True
     )
@@ -234,7 +235,8 @@ class BuildRuns(models.Model):
     field_timestamp = models.DateTimeField(
         db_column="_timestamp", blank=True, null=True
     )
-    id = models.TextField(primary_key=True)
+    id = models.BigAutoField(primary_key=True)
+    kci_id = models.TextField(unique=True)
     build_definition = models.ForeignKey(
         BuildDefinitions, db_constraint=False, on_delete=models.DO_NOTHING
     )
@@ -340,6 +342,7 @@ class TestDefinitions(models.Model):
     # Disables automatic pytest test discovery for this class
     __test__ = False
 
+    id = models.AutoField(primary_key=True)
     field_timestamp = models.DateTimeField(
         db_column="_timestamp", blank=True, null=True
     )
@@ -375,7 +378,8 @@ class TestRuns(models.Model):
     field_timestamp = models.DateTimeField(
         db_column="_timestamp", blank=True, null=True
     )
-    id = models.TextField(primary_key=True)
+    id = models.BigAutoField(primary_key=True)
+    kci_id = models.TextField(unique=True)
     test_definition = models.ForeignKey(
         TestDefinitions, db_constraint=False, on_delete=models.DO_NOTHING
     )
@@ -385,6 +389,7 @@ class TestRuns(models.Model):
     origin = models.TextField()
     environment_comment = models.TextField(blank=True, null=True)
     environment_misc = models.JSONField(blank=True, null=True)
+    platform = models.TextField(blank=True, null=True)
     comment = models.TextField(blank=True, null=True)
     log_url = models.TextField(blank=True, null=True)
     log_excerpt = models.CharField(max_length=16384, blank=True, null=True)
@@ -398,6 +403,7 @@ class TestRuns(models.Model):
     misc = models.JSONField(blank=True, null=True)
     number_value = models.FloatField(blank=True, null=True)
     environment_compatible = ArrayField(models.TextField(), blank=True, null=True)
+    is_boot = models.BooleanField(blank=True, null=True)
 
     class Meta:
         db_table = "test_runs"
@@ -407,9 +413,14 @@ class TestRuns(models.Model):
             models.Index(fields=["build_run"], name="test_runs_build_run"),
             GinIndex(fields=["environment_compatible"], name="test_runs_compatible"),
             models.Index(fields=["origin"], name="test_runs_origin"),
+            models.Index(fields=["platform"], name="test_runs_platform"),
             models.Index(
-                RawSQL("(environment_misc ->> 'platform')", []),
-                name="test_runs_platform_idx",
+                fields=["origin", "platform", "start_time"],
+                name="test_runs_origin_platform_time",
+            ),
+            models.Index(
+                fields=["build_run", "origin", "platform", "start_time"],
+                name="test_runs_bld_org_plat_time",
             ),
             models.Index(fields=["start_time"], name="test_runs_start_time"),
             models.Index(fields=["status"], name="test_runs_status"),

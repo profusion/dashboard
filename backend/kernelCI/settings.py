@@ -55,6 +55,9 @@ DEBUG_SQL_QUERY = is_boolean_or_string_true(os.environ.get("DEBUG_SQL_QUERY", Fa
 DEBUG_DB_VARS = is_boolean_or_string_true(os.environ.get("DEBUG_DB_VARS", False))
 
 DB_SCHEMA_REFACTOR_READ_PATH = os.environ.get("DB_SCHEMA_REFACTOR_READ_PATH", "legacy")
+DB_SCHEMA_REFACTOR_DUAL_WRITE = is_boolean_or_string_true(
+    os.environ.get("DB_SCHEMA_REFACTOR_DUAL_WRITE", False)
+)
 
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True

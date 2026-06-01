@@ -43,9 +43,11 @@ class TestGetTreeListingData:
         params = mock_cursor.execute.call_args.args[1]
         assert result == expected_result
         assert "JOIN commits ON checkouts.commit_id = commits.id" in query
-        assert "LEFT JOIN build_runs AS builds" in query
-        assert "LEFT JOIN test_runs AS tests" in query
-        assert "test_definitions.path" in query
+        assert "build_counts AS" in query
+        assert "test_counts AS" in query
+        assert "JOIN test_runs AS tests" in query
+        assert "tests.is_boot" in query
+        assert "builds.kci_id NOT LIKE 'maestro:dummy_%%'" in query
         assert params["origin_param"] == "maestro"
 
 
@@ -128,7 +130,8 @@ class TestGetTreeListingDataByCheckoutId:
         assert "commits ON checkouts.commit_id = commits.id" in query
         assert "build_runs AS builds" in query
         assert "test_runs AS tests" in query
-        assert "test_definitions.path" in query
+        assert "tests.is_boot" in query
+        assert "builds.kci_id NOT LIKE 'maestro:dummy_%%'" in query
         assert params == ["checkout_1", "checkout_2"]
 
 
@@ -180,6 +183,7 @@ class TestGetTreeDetailsData:
 
 
 class TestGetLatestTree:
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="")
     @patch("kernelCI_app.queries.tree.Checkouts")
     def test_get_latest_tree_success(self, mock_checkouts_model):
         expected_result = {"git_commit_hash": "abc123", "tree_name": "mainline"}
@@ -194,6 +198,7 @@ class TestGetLatestTree:
 
         assert result == expected_result
 
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="")
     @patch("kernelCI_app.queries.tree.Checkouts")
     def test_get_latest_tree_not_found(self, mock_checkouts_model):
         setup_mock_queryset(mock_checkouts_model, None)
@@ -207,6 +212,7 @@ class TestGetLatestTree:
 
         assert result is None
 
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="")
     @patch("kernelCI_app.queries.tree.Checkouts")
     def test_get_latest_tree_not_found_with_commit_hash(self, mock_checkouts_model):
         setup_mock_queryset(mock_checkouts_model, None)
