@@ -390,6 +390,9 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
         "kernelCI_app.management.commands.helpers.process_submissions.make_build_run_instance_from_build"
     )
     @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_build_run_payload_instance_from_build"
+    )
+    @patch(
         "kernelCI_app.management.commands.helpers.process_submissions.make_test_definition_instance_from_test"
     )
     @patch(
@@ -399,15 +402,20 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
         "kernelCI_app.management.commands.helpers.process_submissions.make_test_run_instance_from_test"
     )
     @patch(
+        "kernelCI_app.management.commands.helpers.process_submissions.make_test_run_payload_instance_from_test"
+    )
+    @patch(
         "kernelCI_app.management.commands.helpers.process_submissions.make_incident_instance"
     )
     @override_settings(DB_SCHEMA_REFACTOR_DUAL_WRITE=True)
     def test_build_instances_from_submission_with_all_types(
         self,
         mock_make_incident,
+        mock_make_test_payload,
         mock_make_test_run,
         mock_make_test,
         mock_make_test_definition,
+        mock_make_build_payload,
         mock_make_build_run,
         mock_make_build,
         mock_make_build_definition,
@@ -419,9 +427,11 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
         mock_make_build_definition.return_value = MagicMock()
         mock_make_build.return_value = MagicMock()
         mock_make_build_run.return_value = MagicMock()
+        mock_make_build_payload.return_value = MagicMock()
         mock_make_test_definition.return_value = MagicMock()
         mock_make_test.return_value = MagicMock()
         mock_make_test_run.return_value = MagicMock()
+        mock_make_test_payload.return_value = MagicMock()
         mock_make_incident.return_value = MagicMock()
 
         submission_data = {
@@ -450,9 +460,11 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
             "build_definitions": [mock_make_build_definition.return_value],
             "builds": [mock_make_build.return_value],
             "build_runs": [mock_make_build_run.return_value],
+            "build_run_payloads": [mock_make_build_payload.return_value],
             "test_definitions": [mock_make_test_definition.return_value],
             "tests": [mock_make_test.return_value],
             "test_runs": [mock_make_test_run.return_value],
+            "test_run_payloads": [mock_make_test_payload.return_value],
             "incidents": [mock_make_incident.return_value],
         }
         self.assertEqual(result, expected)
@@ -462,9 +474,11 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
         mock_make_build_definition.assert_called_once()
         mock_make_build.assert_called_once()
         mock_make_build_run.assert_called_once()
+        mock_make_build_payload.assert_called_once()
         mock_make_test_definition.assert_called_once()
         mock_make_test.assert_called_once()
         mock_make_test_run.assert_called_once()
+        mock_make_test_payload.assert_called_once()
         mock_make_incident.assert_called_once()
 
     @override_settings(DB_SCHEMA_REFACTOR_DUAL_WRITE=False)
@@ -534,8 +548,10 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
 
         self.assertEqual(result["build_definitions"], [])
         self.assertEqual(result["build_runs"], [])
+        self.assertEqual(result["build_run_payloads"], [])
         self.assertEqual(result["test_definitions"], [])
         self.assertEqual(result["test_runs"], [])
+        self.assertEqual(result["test_run_payloads"], [])
         self.assertEqual(result["builds"], [mock_make_build.return_value])
         self.assertEqual(result["tests"], [mock_make_test.return_value])
         self.assertEqual(result["incidents"], [mock_make_incident.return_value])
@@ -555,9 +571,11 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
             "build_definitions": [],
             "builds": [],
             "build_runs": [],
+            "build_run_payloads": [],
             "test_definitions": [],
             "tests": [],
             "test_runs": [],
+            "test_run_payloads": [],
             "incidents": [],
         }
         self.assertEqual(result, expected)

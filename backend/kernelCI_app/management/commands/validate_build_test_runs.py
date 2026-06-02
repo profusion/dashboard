@@ -54,12 +54,15 @@ class Command(BaseCommand):
                             build_runs.checkout_id = builds.checkout_id
                             AND build_definitions.checkout_id = builds.checkout_id
                             AND build_definitions.series = builds.series
+                            AND build_runs.commit_id IS NOT DISTINCT FROM
+                                checkouts.commit_id
                         )
                 ) AS mismatched_runs
             FROM builds
             LEFT JOIN build_runs ON build_runs.kci_id = builds.id
             LEFT JOIN build_definitions
                 ON build_definitions.id = build_runs.build_definition_id
+            LEFT JOIN checkouts ON checkouts.id = builds.checkout_id
             """
         )
         self._print_summary("builds", summary)
@@ -71,17 +74,21 @@ class Command(BaseCommand):
                 builds.series AS legacy_series,
                 build_runs.kci_id AS run_kci_id,
                 build_runs.checkout_id AS run_checkout_id,
+                build_runs.commit_id AS run_commit_id,
                 build_definitions.checkout_id AS definition_checkout_id,
-                build_definitions.series AS definition_series
+                build_definitions.series AS definition_series,
+                checkouts.commit_id AS checkout_commit_id
             FROM builds
             LEFT JOIN build_runs ON build_runs.kci_id = builds.id
             LEFT JOIN build_definitions
                 ON build_definitions.id = build_runs.build_definition_id
+            LEFT JOIN checkouts ON checkouts.id = builds.checkout_id
             WHERE build_runs.kci_id IS NULL
                 OR NOT (
                     build_runs.checkout_id = builds.checkout_id
                     AND build_definitions.checkout_id = builds.checkout_id
                     AND build_definitions.series = builds.series
+                    AND build_runs.commit_id IS NOT DISTINCT FROM checkouts.commit_id
                 )
             ORDER BY builds.id
             LIMIT %s
@@ -107,6 +114,7 @@ class Command(BaseCommand):
                     WHERE test_runs.kci_id IS NOT NULL
                         AND NOT (
                             test_runs.build_run_id = build_runs.id
+                            AND test_runs.checkout_id = build_runs.checkout_id
                             AND test_definitions.path IS NOT DISTINCT FROM tests.path
                             AND test_definitions.number_prefix IS NOT DISTINCT FROM
                                 tests.number_prefix
@@ -130,6 +138,8 @@ class Command(BaseCommand):
                 tests.path AS legacy_path,
                 test_runs.kci_id AS run_kci_id,
                 test_runs.build_run_id AS run_build_id,
+                test_runs.checkout_id AS run_checkout_id,
+                build_runs.checkout_id AS build_checkout_id,
                 test_definitions.path AS definition_path
             FROM tests
             LEFT JOIN build_runs ON build_runs.kci_id = tests.build_id
@@ -141,6 +151,7 @@ class Command(BaseCommand):
                     test_runs.kci_id IS NULL
                     OR NOT (
                         test_runs.build_run_id = build_runs.id
+                        AND test_runs.checkout_id = build_runs.checkout_id
                         AND test_definitions.path IS NOT DISTINCT FROM tests.path
                         AND test_definitions.number_prefix IS NOT DISTINCT FROM
                             tests.number_prefix

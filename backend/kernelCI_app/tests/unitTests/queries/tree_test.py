@@ -45,7 +45,8 @@ class TestGetTreeListingData:
         assert "JOIN commits ON checkouts.commit_id = commits.id" in query
         assert "build_counts AS" in query
         assert "test_counts AS" in query
-        assert "JOIN test_runs AS tests" in query
+        assert "FROM test_runs AS tests" in query
+        assert "selected_checkouts.id = tests.checkout_id" in query
         assert "tests.is_boot" in query
         assert "builds.kci_id NOT LIKE 'maestro:dummy_%%'" in query
         assert params["origin_param"] == "maestro"

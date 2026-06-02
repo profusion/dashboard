@@ -63,6 +63,15 @@ INSERT_QUERIES = {
         ],
         "query": """{{build_runs["query"]}}""",
     },
+    "build_run_payloads": {
+        "updateable_model_fields": [
+            {% for field in build_run_payloads["updateable_model_fields"] -%}
+            "{{ field }}"{% if not loop.last %},
+            {% endif %}
+            {%- endfor %},
+        ],
+        "query": """{{build_run_payloads["query"]}}""",
+    },
     "test_definitions": {
         "updateable_model_fields": [
             {% for field in test_definitions["updateable_model_fields"] -%}
@@ -89,6 +98,15 @@ INSERT_QUERIES = {
             {%- endfor %},
         ],
         "query": """{{test_runs["query"]}}""",
+    },
+    "test_run_payloads": {
+        "updateable_model_fields": [
+            {% for field in test_run_payloads["updateable_model_fields"] -%}
+            "{{ field }}"{% if not loop.last %},
+            {% endif %}
+            {%- endfor %},
+        ],
+        "query": """{{test_run_payloads["query"]}}""",
     },
     "incidents": {
         "updateable_model_fields": [

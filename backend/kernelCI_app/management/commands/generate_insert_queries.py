@@ -22,6 +22,8 @@ CONFLICT_TARGETS = {
         "number_unit",
     ),
     "test_runs": ("kci_id",),
+    "build_run_payloads": ("build_run_id",),
+    "test_run_payloads": ("test_run_id",),
 }
 
 
@@ -57,7 +59,7 @@ class Command(BaseCommand):
 
                 field_name = (
                     field.name + "_id"
-                    if field.get_internal_type() == "ForeignKey"
+                    if field.get_internal_type() in ("ForeignKey", "OneToOneField")
                     else field.name
                 )
                 real_name = field.db_column or field_name
@@ -117,9 +119,11 @@ class Command(BaseCommand):
             build_definitions=var_insert_queries["build_definitions"],
             builds=var_insert_queries["builds"],
             build_runs=var_insert_queries["build_runs"],
+            build_run_payloads=var_insert_queries["build_run_payloads"],
             test_definitions=var_insert_queries["test_definitions"],
             tests=var_insert_queries["tests"],
             test_runs=var_insert_queries["test_runs"],
+            test_run_payloads=var_insert_queries["test_run_payloads"],
             incidents=var_insert_queries["incidents"],
         )
 

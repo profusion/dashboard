@@ -43,6 +43,7 @@ from kernelCI_app.management.commands.helpers.process_submissions import (
 )
 from kernelCI_app.models import (
     BuildDefinitions,
+    BuildRunPayloads,
     BuildRuns,
     Builds,
     Checkouts,
@@ -50,6 +51,7 @@ from kernelCI_app.models import (
     Incidents,
     Issues,
     TestDefinitions,
+    TestRunPayloads,
     TestRuns,
     Tests,
 )
@@ -309,6 +311,20 @@ def assign_build_definition_ids(build_runs_buf: list[BuildRuns]) -> None:
         )
 
 
+def assign_build_commit_ids(build_runs_buf: list[BuildRuns]) -> None:
+    """Denormalize checkout.commit_id onto build_runs for commit-metadata joins."""
+    checkout_ids = {build_run.checkout_id for build_run in build_runs_buf}
+    if not checkout_ids:
+        return
+
+    commit_ids_by_checkout_id = dict(
+        Checkouts.objects.filter(id__in=checkout_ids).values_list("id", "commit_id")
+    )
+
+    for build_run in build_runs_buf:
+        build_run.commit_id = commit_ids_by_checkout_id.get(build_run.checkout_id)
+
+
 def assign_test_build_definition_ids(
     test_definitions_buf: list[TestDefinitions],
     test_runs_buf: list[TestRuns],
@@ -350,14 +366,15 @@ def assign_test_definition_ids(test_runs_buf: list[TestRuns]) -> None:
         return
 
     build_rows = BuildRuns.objects.filter(kci_id__in=build_run_kci_ids).values_list(
-        "kci_id", "id", "build_definition_id"
+        "kci_id", "id", "build_definition_id", "checkout_id"
     )
     build_run_by_kci_id = {
-        kci_id: (id, build_definition_id)
-        for kci_id, id, build_definition_id in build_rows
+        kci_id: (id, build_definition_id, checkout_id)
+        for kci_id, id, build_definition_id, checkout_id in build_rows
     }
     build_definition_ids = {
-        build_definition_id for _, build_definition_id in build_run_by_kci_id.values()
+        build_definition_id
+        for _, build_definition_id, _ in build_run_by_kci_id.values()
     }
     if not build_definition_ids:
         return
@@ -374,7 +391,8 @@ def assign_test_definition_ids(test_runs_buf: list[TestRuns]) -> None:
         build_run = build_run_by_kci_id.get(getattr(test_run, "_legacy_build_id", None))
         if build_run is None:
             continue
-        build_run_id, build_definition_id = build_run
+        build_run_id, build_definition_id, checkout_id = build_run
+        test_run.checkout_id = checkout_id
         test_run.build_run_id = build_run_id
         key = (
             build_definition_id,
@@ -406,6 +424,42 @@ def assign_incident_run_ids(incidents_buf: list[Incidents]) -> None:
             incident.test_run_id = test_run_ids_by_kci_id.get(incident.test_id)
 
 
+def assign_build_payload_run_ids(payloads_buf: list[BuildRunPayloads]) -> None:
+    build_kci_ids = {
+        getattr(payload, "_legacy_build_id", None)
+        for payload in payloads_buf
+        if getattr(payload, "_legacy_build_id", None)
+    }
+    if not build_kci_ids:
+        return
+
+    build_run_ids_by_kci_id = dict(
+        BuildRuns.objects.filter(kci_id__in=build_kci_ids).values_list("kci_id", "id")
+    )
+    for payload in payloads_buf:
+        payload.build_run_id = build_run_ids_by_kci_id.get(
+            getattr(payload, "_legacy_build_id", None)
+        )
+
+
+def assign_test_payload_run_ids(payloads_buf: list[TestRunPayloads]) -> None:
+    test_kci_ids = {
+        getattr(payload, "_legacy_test_id", None)
+        for payload in payloads_buf
+        if getattr(payload, "_legacy_test_id", None)
+    }
+    if not test_kci_ids:
+        return
+
+    test_run_ids_by_kci_id = dict(
+        TestRuns.objects.filter(kci_id__in=test_kci_ids).values_list("kci_id", "id")
+    )
+    for payload in payloads_buf:
+        payload.test_run_id = test_run_ids_by_kci_id.get(
+            getattr(payload, "_legacy_test_id", None)
+        )
+
+
 def flush_buffers(
     *,
     commits_buf: list[Commits] | None = None,
@@ -414,9 +468,11 @@ def flush_buffers(
     build_definitions_buf: list[BuildDefinitions] | None = None,
     builds_buf: list[Builds],
     build_runs_buf: list[BuildRuns] | None = None,
+    build_run_payloads_buf: list[BuildRunPayloads] | None = None,
     test_definitions_buf: list[TestDefinitions] | None = None,
     tests_buf: list[Tests],
     test_runs_buf: list[TestRuns] | None = None,
+    test_run_payloads_buf: list[TestRunPayloads] | None = None,
     incidents_buf: list[Incidents],
     buffer_files: set[tuple[str, str]],
     dirs: dict[INGESTER_DIRS, str],
@@ -433,10 +489,14 @@ def flush_buffers(
         build_definitions_buf = []
     if build_runs_buf is None:
         build_runs_buf = []
+    if build_run_payloads_buf is None:
+        build_run_payloads_buf = []
     if test_definitions_buf is None:
         test_definitions_buf = []
     if test_runs_buf is None:
         test_runs_buf = []
+    if test_run_payloads_buf is None:
+        test_run_payloads_buf = []
 
     total = (
         len(commits_buf)
@@ -445,9 +505,11 @@ def flush_buffers(
         + len(build_definitions_buf)
         + len(builds_buf)
         + len(build_runs_buf)
+        + len(build_run_payloads_buf)
         + len(test_definitions_buf)
         + len(tests_buf)
         + len(test_runs_buf)
+        + len(test_run_payloads_buf)
         + len(incidents_buf)
     )
 
@@ -466,13 +528,18 @@ def flush_buffers(
             consume_buffer(checkouts_buf, "checkouts")
             consume_buffer(build_definitions_buf, "build_definitions")
             assign_build_definition_ids(build_runs_buf)
+            assign_build_commit_ids(build_runs_buf)
             consume_buffer(builds_buf, "builds")
             consume_buffer(build_runs_buf, "build_runs")
+            assign_build_payload_run_ids(build_run_payloads_buf)
+            consume_buffer(build_run_payloads_buf, "build_run_payloads")
             assign_test_build_definition_ids(test_definitions_buf, test_runs_buf)
             consume_buffer(test_definitions_buf, "test_definitions")
             assign_test_definition_ids(test_runs_buf)
             consume_buffer(tests_buf, "tests")
             consume_buffer(test_runs_buf, "test_runs")
+            assign_test_payload_run_ids(test_run_payloads_buf)
+            consume_buffer(test_run_payloads_buf, "test_run_payloads")
             assign_incident_run_ids(incidents_buf)
             consume_buffer(incidents_buf, "incidents")
             aggregate_checkouts_and_pendings(
@@ -502,7 +569,8 @@ def flush_buffers(
         msg = (
             "Flushed batch in %.3fs (%.1f items/s): "
             "commits=%d issues=%d checkouts=%d build_definitions=%d builds=%d "
-            "build_runs=%d test_definitions=%d tests=%d test_runs=%d incidents=%d"
+            "build_runs=%d build_run_payloads=%d test_definitions=%d tests=%d "
+            "test_runs=%d test_run_payloads=%d incidents=%d"
             % (
                 flush_dur,
                 rate,
@@ -512,9 +580,11 @@ def flush_buffers(
                 len(build_definitions_buf),
                 len(builds_buf),
                 len(build_runs_buf),
+                len(build_run_payloads_buf),
                 len(test_definitions_buf),
                 len(tests_buf),
                 len(test_runs_buf),
+                len(test_run_payloads_buf),
                 len(incidents_buf),
             )
         )
@@ -525,9 +595,11 @@ def flush_buffers(
         build_definitions_buf.clear()
         builds_buf.clear()
         build_runs_buf.clear()
+        build_run_payloads_buf.clear()
         test_definitions_buf.clear()
         tests_buf.clear()
         test_runs_buf.clear()
+        test_run_payloads_buf.clear()
         incidents_buf.clear()
         buffer_files.clear()
 
@@ -548,9 +620,11 @@ class SubmissionsInstances(TypedDict):
     build_definitions: list[BuildDefinitions]
     builds: list[Builds]
     build_runs: list[BuildRuns]
+    build_run_payloads: list[BuildRunPayloads]
     test_definitions: list[TestDefinitions]
     tests: list[Tests]
     test_runs: list[TestRuns]
+    test_run_payloads: list[TestRunPayloads]
     incidents: list[Incidents]
 
 
@@ -573,9 +647,11 @@ def process_batch(
         "build_definitions": [],
         "builds": [],
         "build_runs": [],
+        "build_run_payloads": [],
         "test_definitions": [],
         "tests": [],
         "test_runs": [],
+        "test_run_payloads": [],
         "incidents": [],
     }
 
@@ -625,9 +701,11 @@ def process_batch(
             instances_dict["build_definitions"].extend(instances["build_definitions"])
             instances_dict["builds"].extend(instances["builds"])
             instances_dict["build_runs"].extend(instances["build_runs"])
+            instances_dict["build_run_payloads"].extend(instances["build_run_payloads"])
             instances_dict["test_definitions"].extend(instances["test_definitions"])
             instances_dict["tests"].extend(instances["tests"])
             instances_dict["test_runs"].extend(instances["test_runs"])
+            instances_dict["test_run_payloads"].extend(instances["test_run_payloads"])
             instances_dict["incidents"].extend(instances["incidents"])
 
             buffer_files.add((file["name"], file["path"]))
@@ -648,6 +726,9 @@ def process_batch(
         )
         instances_dict["builds"].sort(key=lambda x: x.id)
         instances_dict["build_runs"].sort(key=lambda x: x.id)
+        instances_dict["build_run_payloads"].sort(
+            key=lambda x: getattr(x, "_legacy_build_id", "") or ""
+        )
         instances_dict["test_definitions"].sort(
             key=lambda x: (
                 getattr(x, "_legacy_build_id", "") or "",
@@ -658,6 +739,9 @@ def process_batch(
         )
         instances_dict["tests"].sort(key=lambda x: x.id)
         instances_dict["test_runs"].sort(key=lambda x: x.id)
+        instances_dict["test_run_payloads"].sort(
+            key=lambda x: getattr(x, "_legacy_test_id", "") or ""
+        )
         instances_dict["incidents"].sort(key=lambda x: x.id)
 
         should_flush_checkouts = len(instances_dict["checkouts"]) >= INGEST_BATCH_SIZE
@@ -691,6 +775,11 @@ def process_batch(
                 if len(instances_dict["build_runs"]) >= INGEST_BATCH_SIZE
                 else []
             ),
+            build_run_payloads_buf=(
+                instances_dict["build_run_payloads"]
+                if len(instances_dict["build_run_payloads"]) >= INGEST_BATCH_SIZE
+                else []
+            ),
             test_definitions_buf=(
                 instances_dict["test_definitions"]
                 if len(instances_dict["test_definitions"]) >= INGEST_BATCH_SIZE
@@ -704,6 +793,11 @@ def process_batch(
             test_runs_buf=(
                 instances_dict["test_runs"]
                 if len(instances_dict["test_runs"]) >= INGEST_BATCH_SIZE
+                else []
+            ),
+            test_run_payloads_buf=(
+                instances_dict["test_run_payloads"]
+                if len(instances_dict["test_run_payloads"]) >= INGEST_BATCH_SIZE
                 else []
             ),
             incidents_buf=(
@@ -727,9 +821,11 @@ def process_batch(
             build_definitions_buf=instances_dict["build_definitions"],
             builds_buf=instances_dict["builds"],
             build_runs_buf=instances_dict["build_runs"],
+            build_run_payloads_buf=instances_dict["build_run_payloads"],
             test_definitions_buf=instances_dict["test_definitions"],
             tests_buf=instances_dict["tests"],
             test_runs_buf=instances_dict["test_runs"],
+            test_run_payloads_buf=instances_dict["test_run_payloads"],
             incidents_buf=instances_dict["incidents"],
             buffer_files=buffer_files,
             dirs=dirs,

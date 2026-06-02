@@ -128,7 +128,7 @@ def _get_runs_tree_listing_count_ctes() -> str:
                 ),
                 test_counts AS (
                     SELECT
-                        builds.checkout_id,
+                        tests.checkout_id,
                         COUNT(*) FILTER (
                             WHERE tests.is_boot = FALSE AND tests.status = 'FAIL'
                         ) AS fail_tests,
@@ -173,11 +173,10 @@ def _get_runs_tree_listing_count_ctes() -> str:
                             tests.is_boot = TRUE AND tests.status IS NULL
                             AND tests.id IS NOT NULL
                         ) THEN 1 ELSE 0 END) AS null_boots
-                    FROM build_runs AS builds
+                    FROM test_runs AS tests
                     JOIN selected_checkouts
-                        ON selected_checkouts.id = builds.checkout_id
-                    JOIN test_runs AS tests ON tests.build_run_id = builds.id
-                    GROUP BY builds.checkout_id
+                        ON selected_checkouts.id = tests.checkout_id
+                    GROUP BY tests.checkout_id
                 )
     """
 

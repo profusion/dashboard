@@ -500,7 +500,7 @@ def _get_hardware_listing_data_bulk_from_runs(
                         OR tests.platform = key_list.hardware_id
                     )
                     AND tests.origin = key_list.origin
-                    AND tests.misc ->> 'runtime' = key_list.lab_name
+                    AND tests.lab = key_list.lab_name
                     )
             )
         SELECT
@@ -767,7 +767,7 @@ def get_hardware_details_summary(
                      as known_issues,
                  array[builds.compiler, builds.architecture] AS compiler_arch,
                  builds.config_name,
-                 tests.misc->>'runtime' AS lab,
+                 tests.lab,
                  tests.environment_misc->>'platform' AS platform,
                  tests.environment_compatible,
                  checkouts.origin,
@@ -869,24 +869,24 @@ def _get_hardware_details_summary_from_runs(
                  builds.kci_id,
                  builds.build_definition_id,
                  builds.status,
-                 builds.misc,
+                 builds.lab,
                  builds.start_time,
                  builds.duration,
                  builds.origin,
-                 checkouts.id AS checkout_id,
-                 checkouts.origin AS checkout_origin,
-                 checkouts.tree_name,
-                 checkouts.git_repository_url,
-                 checkouts.git_commit_tags,
-                 checkouts.git_commit_name,
-                 checkouts.git_repository_branch,
-                 checkouts.git_commit_hash
+                 builds.checkout_id,
+                 builds.origin AS checkout_origin,
+                 commits.tree_name,
+                 commits.git_repository_url,
+                 commits.git_commit_tags,
+                 commits.git_commit_name,
+                 commits.git_repository_branch,
+                 commits.git_commit_hash
              FROM
-                checkouts
-            INNER JOIN build_runs AS builds ON
-                builds.checkout_id = checkouts.id
+                build_runs AS builds
+            INNER JOIN commits ON
+                builds.commit_id = commits.id
             WHERE
-                checkouts.git_commit_hash = ANY(%(commits)s)
+                commits.git_commit_hash = ANY(%(commits)s)
            ),
            matching_tests AS MATERIALIZED (
              SELECT
@@ -894,7 +894,7 @@ def _get_hardware_details_summary_from_runs(
                  tests.build_run_id,
                  tests.status,
                  tests.environment_compatible,
-                 tests.misc->>'runtime' AS lab,
+                 tests.lab,
                  tests.platform,
                  tests.is_boot,
                  tests.duration
@@ -978,7 +978,7 @@ def _get_hardware_details_summary_from_runs(
                  array[build_definitions.compiler, build_definitions.architecture]
                      AS compiler_arch,
                  build_definitions.config_name,
-                 builds.misc->>'lab' AS lab,
+                 builds.lab,
                  build_groups.platform AS platform,
                  build_groups.environment_compatible,
                  builds.checkout_origin AS origin,
@@ -1074,24 +1074,24 @@ def query_records(
             SELECT
                 tests.id,
                 tests.origin AS test_origin,
-                tests.environment_misc,
+                test_payloads.environment_misc,
                 tests.path,
-                tests.comment,
-                tests.log_url,
+                test_payloads.comment,
+                test_payloads.log_url,
                 tests.status,
                 tests.start_time,
                 tests.duration,
-                tests.misc,
+                test_payloads.misc,
                 tests.build_id,
                 tests.environment_compatible,
                 builds.architecture AS build__architecture,
                 builds.config_name AS build__config_name,
-                builds.misc AS build__misc,
-                builds.config_url AS build__config_url,
+                build_payloads.misc AS build__misc,
+                build_payloads.config_url AS build__config_url,
                 builds.compiler AS build__compiler,
                 builds.status AS build__status,
                 builds.duration AS build__duration,
-                builds.log_url AS build__log_url,
+                build_payloads.log_url AS build__log_url,
                 builds.start_time AS build__start_time,
                 builds.origin AS build__origin,
                 checkouts.git_repository_url AS build__checkout__git_repository_url,
@@ -1160,52 +1160,49 @@ def _query_records_from_runs(
                 SELECT
                     builds.id,
                     builds.kci_id,
-                    builds.misc,
-                    builds.config_url,
                     builds.status,
                     builds.duration,
-                    builds.log_url,
                     builds.start_time,
                     builds.origin,
                     build_definitions.architecture,
                     build_definitions.config_name,
                     build_definitions.compiler,
-                    checkouts.git_repository_url,
-                    checkouts.git_repository_branch,
-                    checkouts.git_commit_name,
-                    checkouts.git_commit_hash,
-                    checkouts.tree_name,
-                    checkouts.origin AS checkout_origin
+                    commits.git_repository_url,
+                    commits.git_repository_branch,
+                    commits.git_commit_name,
+                    commits.git_commit_hash,
+                    commits.tree_name,
+                    builds.origin AS checkout_origin
                 FROM
-                    checkouts
-                INNER JOIN build_runs AS builds ON
-                    builds.checkout_id = checkouts.id
+                    build_runs AS builds
+                INNER JOIN commits ON
+                    builds.commit_id = commits.id
                 INNER JOIN build_definitions ON
                     builds.build_definition_id = build_definitions.id
                 WHERE
-                    checkouts.git_commit_hash IN ({0})
+                    commits.git_commit_hash IN ({0})
             )
             SELECT
                 tests.kci_id AS id,
                 tests.origin AS test_origin,
-                tests.environment_misc,
+                test_payloads.environment_misc,
                 test_definitions.path,
-                tests.comment,
-                tests.log_url,
+                test_payloads.comment,
+                test_payloads.log_url,
                 tests.status,
                 tests.start_time,
                 tests.duration,
-                tests.misc,
+                test_payloads.misc,
                 builds.kci_id AS build_id,
                 tests.environment_compatible,
                 builds.architecture AS build__architecture,
                 builds.config_name AS build__config_name,
-                builds.misc AS build__misc,
-                builds.config_url AS build__config_url,
+                build_payloads.misc AS build__misc,
+                build_payloads.config_url AS build__config_url,
                 builds.compiler AS build__compiler,
                 builds.status AS build__status,
                 builds.duration AS build__duration,
-                builds.log_url AS build__log_url,
+                build_payloads.log_url AS build__log_url,
                 builds.start_time AS build__start_time,
                 builds.origin AS build__origin,
                 builds.git_repository_url AS build__checkout__git_repository_url,
@@ -1228,6 +1225,10 @@ def _query_records_from_runs(
                 tests.test_definition_id = test_definitions.id
             INNER JOIN selected_builds AS builds ON
                 tests.build_run_id = builds.id
+            LEFT OUTER JOIN test_run_payloads AS test_payloads ON
+                tests.id = test_payloads.test_run_id
+            LEFT OUTER JOIN build_run_payloads AS build_payloads ON
+                builds.id = build_payloads.build_run_id
             LEFT OUTER JOIN incidents ON
                 tests.id = incidents.test_run_id
             LEFT OUTER JOIN issues ON
@@ -1296,24 +1297,24 @@ def get_hardware_summary_data(
             SELECT
                 tests.id,
                 tests.origin AS test_origin,
-                tests.environment_misc,
+                test_payloads.environment_misc,
                 tests.path,
-                tests.comment,
-                tests.log_url,
+                test_payloads.comment,
+                test_payloads.log_url,
                 tests.status,
                 tests.start_time,
                 tests.duration,
-                tests.misc,
+                test_payloads.misc,
                 tests.build_id,
                 tests.environment_compatible,
                 builds.architecture,
                 builds.config_name,
-                builds.misc AS build_misc,
-                builds.config_url,
+                build_payloads.misc AS build_misc,
+                build_payloads.config_url,
                 builds.compiler,
                 builds.status AS build_status,
                 builds.duration AS build_duration,
-                builds.log_url AS build_log_url,
+                build_payloads.log_url AS build_log_url,
                 builds.start_time AS build_start_time,
                 builds.origin AS build_origin,
                 checkouts.git_repository_url,
@@ -1375,32 +1376,32 @@ def _get_hardware_summary_data_from_runs(
             SELECT
                 tests.kci_id AS id,
                 tests.origin AS test_origin,
-                tests.environment_misc,
+                test_payloads.environment_misc,
                 test_definitions.path,
-                tests.comment,
-                tests.log_url,
+                test_payloads.comment,
+                test_payloads.log_url,
                 tests.status,
                 tests.start_time,
                 tests.duration,
-                tests.misc,
+                test_payloads.misc,
                 builds.kci_id AS build_id,
                 tests.environment_compatible,
                 build_definitions.architecture,
                 build_definitions.config_name,
-                builds.misc AS build_misc,
-                builds.config_url,
+                build_payloads.misc AS build_misc,
+                build_payloads.config_url,
                 build_definitions.compiler,
                 builds.status AS build_status,
                 builds.duration AS build_duration,
-                builds.log_url AS build_log_url,
+                build_payloads.log_url AS build_log_url,
                 builds.start_time AS build_start_time,
                 builds.origin AS build_origin,
-                checkouts.git_repository_url,
-                checkouts.git_repository_branch,
-                checkouts.git_commit_name,
-                checkouts.git_commit_hash,
-                checkouts.tree_name,
-                checkouts.origin AS checkout_origin
+                commits.git_repository_url,
+                commits.git_repository_branch,
+                commits.git_commit_name,
+                commits.git_commit_hash,
+                commits.tree_name,
+                builds.origin AS checkout_origin
             FROM
                 test_runs AS tests
             INNER JOIN test_definitions ON
@@ -1409,8 +1410,12 @@ def _get_hardware_summary_data_from_runs(
                 tests.build_run_id = builds.id
             INNER JOIN build_definitions ON
                 builds.build_definition_id = build_definitions.id
-            INNER JOIN checkouts ON
-                builds.checkout_id = checkouts.id
+            INNER JOIN commits ON
+                builds.commit_id = commits.id
+            LEFT OUTER JOIN test_run_payloads AS test_payloads ON
+                tests.id = test_payloads.test_run_id
+            LEFT OUTER JOIN build_run_payloads AS build_payloads ON
+                builds.id = build_payloads.build_run_id
             WHERE
                 tests.start_time >= %s
                 AND tests.start_time <= %s
@@ -1423,7 +1428,7 @@ def _get_hardware_summary_data_from_runs(
                     OR tests.platform = key_list.hardware_id
                 )
                 AND tests.origin = key_list.origin
-                AND tests.misc ->> 'runtime' = key_list.lab_name
+                    AND tests.lab = key_list.lab_name
                 )
             ORDER BY
                 tests.start_time DESC
@@ -1567,8 +1572,7 @@ def _get_hardware_trees_head_commits_from_runs(
         TH.git_commit_hash
     FROM
         test_runs AS tests
-        INNER JOIN build_runs AS builds ON tests.build_run_id = builds.id
-        INNER JOIN tree_heads TH ON builds.checkout_id = TH.id
+        INNER JOIN tree_heads TH ON tests.checkout_id = TH.id
     WHERE
         (
             (
@@ -1744,8 +1748,7 @@ def _get_hardware_trees_data_from_runs(
             TH.git_commit_tags
         FROM
             test_runs AS tests
-            INNER JOIN build_runs AS builds ON tests.build_run_id = builds.id
-            INNER JOIN tree_heads TH ON builds.checkout_id = TH.id
+            INNER JOIN tree_heads TH ON tests.checkout_id = TH.id
         WHERE
             (
                 (

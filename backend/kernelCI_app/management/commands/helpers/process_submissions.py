@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from kernelCI_app.constants.ingester import INGESTER_GRAFANA_LABEL
 from kernelCI_app.models import (
     BuildDefinitions,
+    BuildRunPayloads,
     BuildRuns,
     Builds,
     Checkouts,
@@ -17,6 +18,7 @@ from kernelCI_app.models import (
     Incidents,
     Issues,
     TestDefinitions,
+    TestRunPayloads,
     TestRuns,
     Tests,
 )
@@ -33,9 +35,11 @@ class ProcessedSubmission(TypedDict):
     build_definitions: list[BuildDefinitions]
     builds: list[Builds]
     build_runs: list[BuildRuns]
+    build_run_payloads: list[BuildRunPayloads]
     test_definitions: list[TestDefinitions]
     tests: list[Tests]
     test_runs: list[TestRuns]
+    test_run_payloads: list[TestRunPayloads]
     incidents: list[Incidents]
 
 
@@ -62,9 +66,11 @@ COMMIT_FIELDS = get_model_fields(Commits._meta.get_fields()) - {"id"}
 BUILD_DEFINITION_FIELDS = get_model_fields(BuildDefinitions._meta.get_fields()) - {"id"}
 BUILD_FIELDS = get_model_fields(Builds._meta.get_fields())
 BUILD_RUN_FIELDS = get_model_fields(BuildRuns._meta.get_fields()) - {"id"}
+BUILD_RUN_PAYLOAD_FIELDS = get_model_fields(BuildRunPayloads._meta.get_fields())
 TEST_DEFINITION_FIELDS = get_model_fields(TestDefinitions._meta.get_fields()) - {"id"}
 TEST_FIELDS = get_model_fields(Tests._meta.get_fields())
 TEST_RUN_FIELDS = get_model_fields(TestRuns._meta.get_fields()) - {"id"}
+TEST_RUN_PAYLOAD_FIELDS = get_model_fields(TestRunPayloads._meta.get_fields())
 INCIDENT_FIELDS = get_model_fields(Incidents._meta.get_fields())
 
 
@@ -172,13 +178,28 @@ def make_build_definition_instance_from_build(
 
 
 def make_build_run_instance_from_build(build: dict[str, Any]) -> BuildRuns:
-    build_run_data = build | {"kci_id": build.get("id")}
+    misc = build.get("misc") or {}
+    build_run_data = build | {
+        "kci_id": build.get("id"),
+        "lab": misc.get("lab"),
+    }
     filtered_build_run = {
         key: value for key, value in build_run_data.items() if key in BUILD_RUN_FIELDS
     }
     obj = BuildRuns(**filtered_build_run)
     obj._definition_series = build.get("series")
     obj.field_timestamp = timezone.now()
+    return obj
+
+
+def make_build_run_payload_instance_from_build(
+    build: dict[str, Any],
+) -> BuildRunPayloads:
+    filtered_payload = {
+        key: value for key, value in build.items() if key in BUILD_RUN_PAYLOAD_FIELDS
+    }
+    obj = BuildRunPayloads(**filtered_payload)
+    obj._legacy_build_id = build.get("id")
     return obj
 
 
@@ -216,6 +237,7 @@ def make_test_run_instance_from_test(test: dict[str, Any]) -> TestRuns:
         "kci_id": flattened_test.get("id"),
         "is_boot": is_boot,
         "platform": environment_misc.get("platform"),
+        "lab": (flattened_test.get("misc") or {}).get("runtime"),
     }
     filtered_test_run = {
         key: value for key, value in test_run_data.items() if key in TEST_RUN_FIELDS
@@ -226,6 +248,18 @@ def make_test_run_instance_from_test(test: dict[str, Any]) -> TestRuns:
     obj._definition_number_prefix = flattened_test.get("number_prefix")
     obj._definition_number_unit = flattened_test.get("number_unit")
     obj.field_timestamp = timezone.now()
+    return obj
+
+
+def make_test_run_payload_instance_from_test(test: dict[str, Any]) -> TestRunPayloads:
+    flattened_test = flatten_dict_specific(test, ["environment", "number"])
+    filtered_payload = {
+        key: value
+        for key, value in flattened_test.items()
+        if key in TEST_RUN_PAYLOAD_FIELDS
+    }
+    obj = TestRunPayloads(**filtered_payload)
+    obj._legacy_test_id = flattened_test.get("id")
     return obj
 
 
@@ -258,9 +292,11 @@ def build_instances_from_submission(
         "build_definitions": [],
         "builds": [],
         "build_runs": [],
+        "build_run_payloads": [],
         "test_definitions": [],
         "tests": [],
         "test_runs": [],
+        "test_run_payloads": [],
         "incidents": [],
     }
     if commit_enrichments is None:
@@ -309,6 +345,10 @@ def build_instances_from_submission(
 
                             build_run = make_build_run_instance_from_build(item)
                             out["build_runs"].append(build_run)
+                            build_payload = make_build_run_payload_instance_from_build(
+                                item
+                            )
+                            out["build_run_payloads"].append(build_payload)
 
                         try:
                             misc = build.misc
@@ -333,6 +373,10 @@ def build_instances_from_submission(
 
                             test_run = make_test_run_instance_from_test(item)
                             out["test_runs"].append(test_run)
+                            test_payload = make_test_run_payload_instance_from_test(
+                                item
+                            )
+                            out["test_run_payloads"].append(test_payload)
 
                         try:
                             misc = test.misc

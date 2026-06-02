@@ -55,19 +55,9 @@ class Migration(migrations.Migration):
                 ),
                 ("kci_id", models.TextField(unique=True)),
                 ("origin", models.TextField()),
-                ("comment", models.TextField(blank=True, null=True)),
                 ("start_time", models.DateTimeField(blank=True, null=True)),
                 ("duration", models.FloatField(blank=True, null=True)),
-                ("command", models.TextField(blank=True, null=True)),
-                ("input_files", models.JSONField(blank=True, null=True)),
-                ("output_files", models.JSONField(blank=True, null=True)),
-                ("config_url", models.TextField(blank=True, null=True)),
-                ("log_url", models.TextField(blank=True, null=True)),
-                (
-                    "log_excerpt",
-                    models.CharField(blank=True, max_length=16384, null=True),
-                ),
-                ("misc", models.JSONField(blank=True, null=True)),
+                ("lab", models.TextField(blank=True, null=True)),
                 (
                     "status",
                     models.CharField(
@@ -100,9 +90,49 @@ class Migration(migrations.Migration):
                         to="kernelCI_app.checkouts",
                     ),
                 ),
+                (
+                    "commit",
+                    models.ForeignKey(
+                        blank=True,
+                        db_constraint=False,
+                        db_index=False,
+                        null=True,
+                        on_delete=django.db.models.deletion.DO_NOTHING,
+                        to="kernelCI_app.commits",
+                    ),
+                ),
             ],
             options={
                 "db_table": "build_runs",
+            },
+        ),
+        migrations.CreateModel(
+            name="BuildRunPayloads",
+            fields=[
+                (
+                    "build_run",
+                    models.OneToOneField(
+                        db_constraint=False,
+                        on_delete=django.db.models.deletion.DO_NOTHING,
+                        primary_key=True,
+                        serialize=False,
+                        to="kernelCI_app.buildruns",
+                    ),
+                ),
+                ("comment", models.TextField(blank=True, null=True)),
+                ("command", models.TextField(blank=True, null=True)),
+                ("input_files", models.JSONField(blank=True, null=True)),
+                ("output_files", models.JSONField(blank=True, null=True)),
+                ("config_url", models.TextField(blank=True, null=True)),
+                ("log_url", models.TextField(blank=True, null=True)),
+                (
+                    "log_excerpt",
+                    models.CharField(blank=True, max_length=16384, null=True),
+                ),
+                ("misc", models.JSONField(blank=True, null=True)),
+            ],
+            options={
+                "db_table": "build_run_payloads",
             },
         ),
         migrations.AddField(
@@ -164,15 +194,8 @@ class Migration(migrations.Migration):
                 ),
                 ("kci_id", models.TextField(unique=True)),
                 ("origin", models.TextField()),
-                ("environment_comment", models.TextField(blank=True, null=True)),
-                ("environment_misc", models.JSONField(blank=True, null=True)),
                 ("platform", models.TextField(blank=True, null=True)),
-                ("comment", models.TextField(blank=True, null=True)),
-                ("log_url", models.TextField(blank=True, null=True)),
-                (
-                    "log_excerpt",
-                    models.CharField(blank=True, max_length=16384, null=True),
-                ),
+                ("lab", models.TextField(blank=True, null=True)),
                 (
                     "status",
                     models.CharField(
@@ -191,9 +214,6 @@ class Migration(migrations.Migration):
                 ),
                 ("start_time", models.DateTimeField(blank=True, null=True)),
                 ("duration", models.FloatField(blank=True, null=True)),
-                ("input_files", models.JSONField(blank=True, null=True)),
-                ("output_files", models.JSONField(blank=True, null=True)),
-                ("misc", models.JSONField(blank=True, null=True)),
                 ("number_value", models.FloatField(blank=True, null=True)),
                 (
                     "environment_compatible",
@@ -211,6 +231,15 @@ class Migration(migrations.Migration):
                     ),
                 ),
                 (
+                    "checkout",
+                    models.ForeignKey(
+                        db_constraint=False,
+                        db_index=False,
+                        on_delete=django.db.models.deletion.DO_NOTHING,
+                        to="kernelCI_app.checkouts",
+                    ),
+                ),
+                (
                     "test_definition",
                     models.ForeignKey(
                         db_constraint=False,
@@ -221,6 +250,35 @@ class Migration(migrations.Migration):
             ],
             options={
                 "db_table": "test_runs",
+            },
+        ),
+        migrations.CreateModel(
+            name="TestRunPayloads",
+            fields=[
+                (
+                    "test_run",
+                    models.OneToOneField(
+                        db_constraint=False,
+                        on_delete=django.db.models.deletion.DO_NOTHING,
+                        primary_key=True,
+                        serialize=False,
+                        to="kernelCI_app.testruns",
+                    ),
+                ),
+                ("environment_comment", models.TextField(blank=True, null=True)),
+                ("environment_misc", models.JSONField(blank=True, null=True)),
+                ("comment", models.TextField(blank=True, null=True)),
+                ("log_url", models.TextField(blank=True, null=True)),
+                (
+                    "log_excerpt",
+                    models.CharField(blank=True, max_length=16384, null=True),
+                ),
+                ("input_files", models.JSONField(blank=True, null=True)),
+                ("output_files", models.JSONField(blank=True, null=True)),
+                ("misc", models.JSONField(blank=True, null=True)),
+            ],
+            options={
+                "db_table": "test_run_payloads",
             },
         ),
         migrations.AddField(
@@ -276,7 +334,25 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name="buildruns",
+            index=models.Index(fields=["commit"], name="build_runs_commit"),
+        ),
+        migrations.AddIndex(
+            model_name="buildruns",
+            index=models.Index(
+                fields=["commit", "origin", "start_time"],
+                name="build_runs_commit_origin_time",
+            ),
+        ),
+        migrations.AddIndex(
+            model_name="buildruns",
             index=models.Index(fields=["origin"], name="build_runs_origin"),
+        ),
+        migrations.AddIndex(
+            model_name="buildruns",
+            index=models.Index(
+                fields=["origin", "lab", "start_time"],
+                name="build_runs_origin_lab_time",
+            ),
         ),
         migrations.AddIndex(
             model_name="buildruns",
@@ -320,6 +396,10 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name="testruns",
+            index=models.Index(fields=["checkout"], name="test_runs_checkout"),
+        ),
+        migrations.AddIndex(
+            model_name="testruns",
             index=django.contrib.postgres.indexes.GinIndex(
                 fields=["environment_compatible"], name="test_runs_compatible"
             ),
@@ -330,6 +410,13 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name="testruns",
+            index=models.Index(
+                fields=["origin", "lab", "start_time"],
+                name="test_runs_origin_lab_time",
+            ),
+        ),
+        migrations.AddIndex(
+            model_name="testruns",
             index=models.Index(fields=["platform"], name="test_runs_platform"),
         ),
         migrations.AddIndex(
@@ -337,6 +424,13 @@ class Migration(migrations.Migration):
             index=models.Index(
                 fields=["origin", "platform", "start_time"],
                 name="test_runs_origin_platform_time",
+            ),
+        ),
+        migrations.AddIndex(
+            model_name="testruns",
+            index=models.Index(
+                fields=["origin", "platform", "lab", "start_time"],
+                name="test_runs_origin_plat_lab_time",
             ),
         ),
         migrations.AddIndex(

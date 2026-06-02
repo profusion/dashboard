@@ -243,17 +243,18 @@ class BuildRuns(models.Model):
     checkout = models.ForeignKey(
         Checkouts, db_constraint=False, on_delete=models.DO_NOTHING
     )
+    commit = models.ForeignKey(
+        Commits,
+        db_constraint=False,
+        db_index=False,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+    )
     origin = models.TextField()
-    comment = models.TextField(blank=True, null=True)
     start_time = models.DateTimeField(blank=True, null=True)
     duration = models.FloatField(blank=True, null=True)
-    command = models.TextField(blank=True, null=True)
-    input_files = models.JSONField(blank=True, null=True)
-    output_files = models.JSONField(blank=True, null=True)
-    config_url = models.TextField(blank=True, null=True)
-    log_url = models.TextField(blank=True, null=True)
-    log_excerpt = models.CharField(max_length=16384, blank=True, null=True)
-    misc = models.JSONField(blank=True, null=True)
+    lab = models.TextField(blank=True, null=True)
     status = models.CharField(
         max_length=10, choices=StatusChoices.choices, blank=True, null=True
     )
@@ -264,10 +265,39 @@ class BuildRuns(models.Model):
             models.Index(fields=["field_timestamp"], name="build_runs__timestamp"),
             models.Index(fields=["build_definition"], name="build_runs_definition"),
             models.Index(fields=["checkout"], name="build_runs_checkout"),
+            models.Index(fields=["commit"], name="build_runs_commit"),
+            models.Index(
+                fields=["commit", "origin", "start_time"],
+                name="build_runs_commit_origin_time",
+            ),
             models.Index(fields=["origin"], name="build_runs_origin"),
+            models.Index(
+                fields=["origin", "lab", "start_time"],
+                name="build_runs_origin_lab_time",
+            ),
             models.Index(fields=["start_time"], name="build_runs_start_time"),
             models.Index(fields=["status"], name="build_runs_status"),
         ]
+
+
+class BuildRunPayloads(models.Model):
+    build_run = models.OneToOneField(
+        BuildRuns,
+        db_constraint=False,
+        on_delete=models.DO_NOTHING,
+        primary_key=True,
+    )
+    comment = models.TextField(blank=True, null=True)
+    command = models.TextField(blank=True, null=True)
+    input_files = models.JSONField(blank=True, null=True)
+    output_files = models.JSONField(blank=True, null=True)
+    config_url = models.TextField(blank=True, null=True)
+    log_url = models.TextField(blank=True, null=True)
+    log_excerpt = models.CharField(max_length=16384, blank=True, null=True)
+    misc = models.JSONField(blank=True, null=True)
+
+    class Meta:
+        db_table = "build_run_payloads"
 
 
 class Tests(models.Model):
@@ -386,21 +416,17 @@ class TestRuns(models.Model):
     build_run = models.ForeignKey(
         BuildRuns, db_constraint=False, on_delete=models.DO_NOTHING
     )
+    checkout = models.ForeignKey(
+        Checkouts, db_constraint=False, db_index=False, on_delete=models.DO_NOTHING
+    )
     origin = models.TextField()
-    environment_comment = models.TextField(blank=True, null=True)
-    environment_misc = models.JSONField(blank=True, null=True)
     platform = models.TextField(blank=True, null=True)
-    comment = models.TextField(blank=True, null=True)
-    log_url = models.TextField(blank=True, null=True)
-    log_excerpt = models.CharField(max_length=16384, blank=True, null=True)
+    lab = models.TextField(blank=True, null=True)
     status = models.CharField(
         max_length=10, choices=StatusChoices.choices, blank=True, null=True
     )
     start_time = models.DateTimeField(blank=True, null=True)
     duration = models.FloatField(blank=True, null=True)
-    input_files = models.JSONField(blank=True, null=True)
-    output_files = models.JSONField(blank=True, null=True)
-    misc = models.JSONField(blank=True, null=True)
     number_value = models.FloatField(blank=True, null=True)
     environment_compatible = ArrayField(models.TextField(), blank=True, null=True)
     is_boot = models.BooleanField(blank=True, null=True)
@@ -411,12 +437,21 @@ class TestRuns(models.Model):
             models.Index(fields=["field_timestamp"], name="test_runs__timestamp"),
             models.Index(fields=["test_definition"], name="test_runs_definition"),
             models.Index(fields=["build_run"], name="test_runs_build_run"),
+            models.Index(fields=["checkout"], name="test_runs_checkout"),
             GinIndex(fields=["environment_compatible"], name="test_runs_compatible"),
             models.Index(fields=["origin"], name="test_runs_origin"),
+            models.Index(
+                fields=["origin", "lab", "start_time"],
+                name="test_runs_origin_lab_time",
+            ),
             models.Index(fields=["platform"], name="test_runs_platform"),
             models.Index(
                 fields=["origin", "platform", "start_time"],
                 name="test_runs_origin_platform_time",
+            ),
+            models.Index(
+                fields=["origin", "platform", "lab", "start_time"],
+                name="test_runs_origin_plat_lab_time",
             ),
             models.Index(
                 fields=["build_run", "origin", "platform", "start_time"],
@@ -425,6 +460,29 @@ class TestRuns(models.Model):
             models.Index(fields=["start_time"], name="test_runs_start_time"),
             models.Index(fields=["status"], name="test_runs_status"),
         ]
+
+
+class TestRunPayloads(models.Model):
+    # Disables automatic pytest test discovery for this class
+    __test__ = False
+
+    test_run = models.OneToOneField(
+        TestRuns,
+        db_constraint=False,
+        on_delete=models.DO_NOTHING,
+        primary_key=True,
+    )
+    environment_comment = models.TextField(blank=True, null=True)
+    environment_misc = models.JSONField(blank=True, null=True)
+    comment = models.TextField(blank=True, null=True)
+    log_url = models.TextField(blank=True, null=True)
+    log_excerpt = models.CharField(max_length=16384, blank=True, null=True)
+    input_files = models.JSONField(blank=True, null=True)
+    output_files = models.JSONField(blank=True, null=True)
+    misc = models.JSONField(blank=True, null=True)
+
+    class Meta:
+        db_table = "test_run_payloads"
 
 
 class Incidents(models.Model):

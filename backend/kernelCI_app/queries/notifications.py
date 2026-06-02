@@ -241,7 +241,7 @@ def _kcidb_new_issues_from_runs():
                ROW_NUMBER() OVER (PARTITION BY inc.issue_id ORDER BY inc._timestamp ASC) as incident_rn
            FROM incidents inc
            JOIN build_runs b ON inc.build_run_id = b.id
-           JOIN checkouts c ON b.checkout_id = c.id
+           JOIN commits c ON b.commit_id = c.id
            WHERE inc._timestamp >= NOW() - INTERVAL %(interval)s
 
            UNION
@@ -262,7 +262,7 @@ def _kcidb_new_issues_from_runs():
            JOIN test_runs t ON inc.test_run_id = t.id
            JOIN test_definitions td ON t.test_definition_id = td.id
            JOIN build_runs b ON t.build_run_id = b.id
-           JOIN checkouts c ON b.checkout_id = c.id
+           JOIN commits c ON b.commit_id = c.id
            WHERE inc._timestamp >= NOW() - INTERVAL %(interval)s
             AND (td.path = 'boot' OR td.path = 'boot.nfs')
        )
@@ -423,7 +423,7 @@ def _kcidb_issue_details_from_runs(issue_id):
                ROW_NUMBER() OVER (PARTITION BY inc.issue_id ORDER BY inc._timestamp ASC) as incident_rn
            FROM incidents inc
            JOIN build_runs b ON inc.build_run_id = b.id
-           JOIN checkouts c ON b.checkout_id = c.id
+           JOIN commits c ON b.commit_id = c.id
            WHERE inc.issue_id = %(issue_id)s
 
            UNION
@@ -443,7 +443,7 @@ def _kcidb_issue_details_from_runs(issue_id):
            FROM incidents inc
            JOIN test_runs t ON inc.test_run_id = t.id
            JOIN build_runs b ON t.build_run_id = b.id
-           JOIN checkouts c ON b.checkout_id = c.id
+           JOIN commits c ON b.commit_id = c.id
            WHERE inc.issue_id = %(issue_id)s
        )
 
@@ -514,11 +514,12 @@ def _kcidb_build_incidents_from_runs(issue_id):
         SELECT DISTINCT ON (bd.config_name, bd.architecture, bd.compiler)
             b.kci_id AS id,
             bd.config_name,
-            b.config_url,
+            bp.config_url,
             bd.architecture,
             bd.compiler
         FROM build_runs b
             JOIN build_definitions bd ON b.build_definition_id = bd.id
+            LEFT JOIN build_run_payloads bp ON b.id = bp.build_run_id
             LEFT JOIN incidents inc ON inc.build_run_id = b.id
         WHERE inc.issue_id = %(issue_id)s
         ORDER BY bd.config_name, bd.architecture, bd.compiler, b._timestamp DESC;
@@ -676,7 +677,7 @@ def _kcidb_last_test_without_issue_from_runs(issue, incident):
         SELECT DISTINCT c.git_commit_hash
         FROM test_runs t
         JOIN build_runs b ON t.build_run_id = b.id
-        JOIN checkouts c ON b.checkout_id = c.id
+            JOIN commits c ON b.commit_id = c.id
         JOIN incidents inc ON inc.test_run_id = t.id
         WHERE inc.issue_id = %(issue_id)s
      )
@@ -684,7 +685,7 @@ def _kcidb_last_test_without_issue_from_runs(issue, incident):
         FROM test_runs t
         JOIN test_definitions td ON t.test_definition_id = td.id
         JOIN build_runs b ON t.build_run_id = b.id
-        JOIN checkouts c ON b.checkout_id = c.id
+            JOIN commits c ON b.commit_id = c.id
         WHERE c.git_repository_url = %(giturl)s
         AND c.git_repository_branch = %(branch)s
         AND t.platform = %(platform)s
@@ -1011,21 +1012,21 @@ def _kcidb_tests_results_from_runs(
                     JOIN test_definitions td ON t.test_definition_id = td.id
                     JOIN build_runs b ON t.build_run_id = b.id
                     JOIN build_definitions bd ON b.build_definition_id = bd.id
-                    JOIN checkouts c ON b.checkout_id = c.id
+                    JOIN commits c ON b.commit_id = c.id
                 WHERE t.origin = %(origin)s
                     AND c.git_repository_url = %(giturl)s
                     AND c.git_repository_branch = %(branch)s
                     {path_clause}
                     AND t.platform != 'kubernetes'
-                    AND C.start_time <= (
+                    AND b.start_time <= (
                         SELECT
-                            MAX(start_time)
+                            MAX(head_build.start_time)
                         FROM
-                            checkouts
+                            build_runs head_build
+                            JOIN commits head_commit ON head_build.commit_id = head_commit.id
                         WHERE
-                            git_commit_hash = %(hash)s
+                            head_commit.git_commit_hash = %(hash)s
                     )
-                    AND c.start_time >= NOW() - INTERVAL %(interval)s
                     AND b.start_time >= NOW() - INTERVAL %(interval)s
                     AND t.start_time >= NOW() - INTERVAL %(interval)s
             ),

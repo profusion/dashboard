@@ -81,6 +81,7 @@ class Command(BaseCommand):
             with transaction.atomic():
                 self._upsert_build_definitions(build_ids)
                 self._upsert_build_runs(build_ids)
+                self._upsert_build_run_payloads(build_ids)
 
             self.stdout.write(f"Processed {len(build_ids)} builds through id={last_id}")
 
@@ -117,6 +118,7 @@ class Command(BaseCommand):
             with transaction.atomic():
                 self._upsert_test_definitions(test_ids)
                 self._upsert_test_runs(test_ids)
+                self._upsert_test_run_payloads(test_ids)
 
             self.stdout.write(f"Processed {len(test_ids)} tests through id={last_id}")
 
@@ -287,17 +289,11 @@ class Command(BaseCommand):
                     kci_id,
                     build_definition_id,
                     checkout_id,
+                    commit_id,
                     origin,
-                    comment,
                     start_time,
                     duration,
-                    command,
-                    input_files,
-                    output_files,
-                    config_url,
-                    log_url,
-                    log_excerpt,
-                    misc,
+                    lab,
                     status
                 )
                 SELECT
@@ -305,19 +301,14 @@ class Command(BaseCommand):
                     builds.id,
                     build_definitions.id,
                     builds.checkout_id,
+                    checkouts.commit_id,
                     builds.origin,
-                    builds.comment,
                     builds.start_time,
                     builds.duration,
-                    builds.command,
-                    builds.input_files,
-                    builds.output_files,
-                    builds.config_url,
-                    builds.log_url,
-                    builds.log_excerpt,
-                    builds.misc,
+                    builds.misc ->> 'lab',
                     builds.status
                 FROM builds
+                JOIN checkouts ON checkouts.id = builds.checkout_id
                 JOIN build_definitions
                     ON build_definitions.checkout_id = builds.checkout_id
                     AND build_definitions.series = builds.series
@@ -330,24 +321,75 @@ class Command(BaseCommand):
                         EXCLUDED.build_definition_id
                     ),
                     checkout_id = COALESCE(build_runs.checkout_id, EXCLUDED.checkout_id),
+                    commit_id = COALESCE(build_runs.commit_id, EXCLUDED.commit_id),
                     origin = COALESCE(build_runs.origin, EXCLUDED.origin),
-                    comment = COALESCE(build_runs.comment, EXCLUDED.comment),
                     start_time = COALESCE(build_runs.start_time, EXCLUDED.start_time),
                     duration = COALESCE(build_runs.duration, EXCLUDED.duration),
-                    command = COALESCE(build_runs.command, EXCLUDED.command),
-                    input_files = COALESCE(build_runs.input_files, EXCLUDED.input_files),
+                    lab = COALESCE(build_runs.lab, EXCLUDED.lab),
+                    status = COALESCE(build_runs.status, EXCLUDED.status)
+                """,
+                [build_ids],
+            )
+
+    def _upsert_build_run_payloads(self, build_ids: list[str]) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO build_run_payloads (
+                    build_run_id,
+                    comment,
+                    command,
+                    input_files,
+                    output_files,
+                    config_url,
+                    log_url,
+                    log_excerpt,
+                    misc
+                )
+                SELECT
+                    build_runs.id,
+                    builds.comment,
+                    builds.command,
+                    builds.input_files,
+                    builds.output_files,
+                    builds.config_url,
+                    builds.log_url,
+                    builds.log_excerpt,
+                    builds.misc
+                FROM builds
+                JOIN build_runs ON build_runs.kci_id = builds.id
+                WHERE builds.id = ANY(%s)
+                ON CONFLICT (build_run_id)
+                DO UPDATE SET
+                    comment = COALESCE(
+                        build_run_payloads.comment,
+                        EXCLUDED.comment
+                    ),
+                    command = COALESCE(
+                        build_run_payloads.command,
+                        EXCLUDED.command
+                    ),
+                    input_files = COALESCE(
+                        build_run_payloads.input_files,
+                        EXCLUDED.input_files
+                    ),
                     output_files = COALESCE(
-                        build_runs.output_files,
+                        build_run_payloads.output_files,
                         EXCLUDED.output_files
                     ),
-                    config_url = COALESCE(build_runs.config_url, EXCLUDED.config_url),
-                    log_url = COALESCE(build_runs.log_url, EXCLUDED.log_url),
+                    config_url = COALESCE(
+                        build_run_payloads.config_url,
+                        EXCLUDED.config_url
+                    ),
+                    log_url = COALESCE(
+                        build_run_payloads.log_url,
+                        EXCLUDED.log_url
+                    ),
                     log_excerpt = COALESCE(
-                        build_runs.log_excerpt,
+                        build_run_payloads.log_excerpt,
                         EXCLUDED.log_excerpt
                     ),
-                    misc = COALESCE(build_runs.misc, EXCLUDED.misc),
-                    status = COALESCE(build_runs.status, EXCLUDED.status)
+                    misc = COALESCE(build_run_payloads.misc, EXCLUDED.misc)
                 """,
                 [build_ids],
             )
@@ -415,19 +457,13 @@ class Command(BaseCommand):
                     kci_id,
                     test_definition_id,
                     build_run_id,
+                    checkout_id,
                     origin,
-                    environment_comment,
-                    environment_misc,
                     platform,
-                    comment,
-                    log_url,
-                    log_excerpt,
+                    lab,
                     status,
                     start_time,
                     duration,
-                    input_files,
-                    output_files,
-                    misc,
                     number_value,
                     environment_compatible,
                     is_boot
@@ -437,19 +473,13 @@ class Command(BaseCommand):
                     tests.id,
                     test_definitions.id,
                     build_runs.id,
+                    build_runs.checkout_id,
                     tests.origin,
-                    tests.environment_comment,
-                    tests.environment_misc,
                     tests.environment_misc ->> 'platform',
-                    tests.comment,
-                    tests.log_url,
-                    tests.log_excerpt,
+                    tests.misc ->> 'runtime',
                     tests.status,
                     tests.start_time,
                     tests.duration,
-                    tests.input_files,
-                    tests.output_files,
-                    tests.misc,
                     tests.number_value,
                     tests.environment_compatible,
                     CASE
@@ -476,34 +506,76 @@ class Command(BaseCommand):
                         EXCLUDED.test_definition_id
                     ),
                     build_run_id = COALESCE(test_runs.build_run_id, EXCLUDED.build_run_id),
+                    checkout_id = COALESCE(test_runs.checkout_id, EXCLUDED.checkout_id),
                     origin = COALESCE(test_runs.origin, EXCLUDED.origin),
-                    environment_comment = COALESCE(
-                        test_runs.environment_comment,
-                        EXCLUDED.environment_comment
-                    ),
-                    environment_misc = COALESCE(
-                        test_runs.environment_misc,
-                        EXCLUDED.environment_misc
-                    ),
                     platform = COALESCE(test_runs.platform, EXCLUDED.platform),
-                    comment = COALESCE(test_runs.comment, EXCLUDED.comment),
-                    log_url = COALESCE(test_runs.log_url, EXCLUDED.log_url),
-                    log_excerpt = COALESCE(
-                        test_runs.log_excerpt,
-                        EXCLUDED.log_excerpt
-                    ),
+                    lab = COALESCE(test_runs.lab, EXCLUDED.lab),
                     status = COALESCE(test_runs.status, EXCLUDED.status),
                     start_time = COALESCE(test_runs.start_time, EXCLUDED.start_time),
                     duration = COALESCE(test_runs.duration, EXCLUDED.duration),
-                    input_files = COALESCE(test_runs.input_files, EXCLUDED.input_files),
-                    output_files = COALESCE(test_runs.output_files, EXCLUDED.output_files),
-                    misc = COALESCE(test_runs.misc, EXCLUDED.misc),
                     number_value = COALESCE(test_runs.number_value, EXCLUDED.number_value),
                     environment_compatible = COALESCE(
                         test_runs.environment_compatible,
                         EXCLUDED.environment_compatible
                     ),
                     is_boot = COALESCE(test_runs.is_boot, EXCLUDED.is_boot)
+                """,
+                [test_ids],
+            )
+
+    def _upsert_test_run_payloads(self, test_ids: list[str]) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO test_run_payloads (
+                    test_run_id,
+                    environment_comment,
+                    environment_misc,
+                    comment,
+                    log_url,
+                    log_excerpt,
+                    input_files,
+                    output_files,
+                    misc
+                )
+                SELECT
+                    test_runs.id,
+                    tests.environment_comment,
+                    tests.environment_misc,
+                    tests.comment,
+                    tests.log_url,
+                    tests.log_excerpt,
+                    tests.input_files,
+                    tests.output_files,
+                    tests.misc
+                FROM tests
+                JOIN test_runs ON test_runs.kci_id = tests.id
+                WHERE tests.id = ANY(%s)
+                ON CONFLICT (test_run_id)
+                DO UPDATE SET
+                    environment_comment = COALESCE(
+                        test_run_payloads.environment_comment,
+                        EXCLUDED.environment_comment
+                    ),
+                    environment_misc = COALESCE(
+                        test_run_payloads.environment_misc,
+                        EXCLUDED.environment_misc
+                    ),
+                    comment = COALESCE(test_run_payloads.comment, EXCLUDED.comment),
+                    log_url = COALESCE(test_run_payloads.log_url, EXCLUDED.log_url),
+                    log_excerpt = COALESCE(
+                        test_run_payloads.log_excerpt,
+                        EXCLUDED.log_excerpt
+                    ),
+                    input_files = COALESCE(
+                        test_run_payloads.input_files,
+                        EXCLUDED.input_files
+                    ),
+                    output_files = COALESCE(
+                        test_run_payloads.output_files,
+                        EXCLUDED.output_files
+                    ),
+                    misc = COALESCE(test_run_payloads.misc, EXCLUDED.misc)
                 """,
                 [test_ids],
             )
