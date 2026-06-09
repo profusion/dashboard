@@ -64,7 +64,9 @@ class TestKcidbNewIssues:
         assert result == expected_result
         mock_execute_query.assert_called_once()
 
-    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @override_settings(
+        DB_SCHEMA_REFACTOR_READ_PATH="legacy", DB_NOTIFICATION_READ_PATH="runs"
+    )
     @patch("kernelCI_app.queries.notifications.kcidb_execute_query")
     def test_kcidb_new_issues_runs_read_path(self, mock_execute_query):
         mock_execute_query.return_value = []

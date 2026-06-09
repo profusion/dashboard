@@ -55,6 +55,11 @@ DEBUG_SQL_QUERY = is_boolean_or_string_true(os.environ.get("DEBUG_SQL_QUERY", Fa
 DEBUG_DB_VARS = is_boolean_or_string_true(os.environ.get("DEBUG_DB_VARS", False))
 
 DB_SCHEMA_REFACTOR_READ_PATH = os.environ.get("DB_SCHEMA_REFACTOR_READ_PATH", "legacy")
+DB_TREE_READ_PATH = os.environ.get("DB_TREE_READ_PATH")
+DB_NOTIFICATION_READ_PATH = os.environ.get("DB_NOTIFICATION_READ_PATH")
+DB_HARDWARE_LISTING_READ_PATH = os.environ.get("DB_HARDWARE_LISTING_READ_PATH")
+DB_HARDWARE_DETAILS_READ_PATH = os.environ.get("DB_HARDWARE_DETAILS_READ_PATH")
+DB_HARDWARE_TREES_READ_PATH = os.environ.get("DB_HARDWARE_TREES_READ_PATH")
 DB_SCHEMA_REFACTOR_DUAL_WRITE = is_boolean_or_string_true(
     os.environ.get("DB_SCHEMA_REFACTOR_DUAL_WRITE", False)
 )

@@ -72,6 +72,15 @@ INSERT_QUERIES = {
         ],
         "query": """{{build_run_payloads["query"]}}""",
     },
+    "hardwares": {
+        "updateable_model_fields": [
+            {% for field in hardwares["updateable_model_fields"] -%}
+            "{{ field }}"{% if not loop.last %},
+            {% endif %}
+            {%- endfor %},
+        ],
+        "query": """{{hardwares["query"]}}""",
+    },
     "test_definitions": {
         "updateable_model_fields": [
             {% for field in test_definitions["updateable_model_fields"] -%}
@@ -98,6 +107,15 @@ INSERT_QUERIES = {
             {%- endfor %},
         ],
         "query": """{{test_runs["query"]}}""",
+    },
+    "test_run_hardwares": {
+        "updateable_model_fields": [
+            {% for field in test_run_hardwares["updateable_model_fields"] -%}
+            "{{ field }}"{% if not loop.last %},
+            {% endif %}
+            {%- endfor %},
+        ],
+        "query": """{{test_run_hardwares["query"]}}""",
     },
     "test_run_payloads": {
         "updateable_model_fields": [

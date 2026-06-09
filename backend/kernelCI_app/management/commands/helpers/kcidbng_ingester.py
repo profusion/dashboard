@@ -48,9 +48,11 @@ from kernelCI_app.models import (
     Builds,
     Checkouts,
     Commits,
+    Hardwares,
     Incidents,
     Issues,
     TestDefinitions,
+    TestRunHardwares,
     TestRunPayloads,
     TestRuns,
     Tests,
@@ -311,6 +313,29 @@ def assign_build_definition_ids(build_runs_buf: list[BuildRuns]) -> None:
         )
 
 
+def assign_checkout_ids(
+    build_definitions_buf: list[BuildDefinitions],
+    build_runs_buf: list[BuildRuns],
+) -> None:
+    """Resolve legacy KCIDB checkout ids to integer checkouts.id for run-schema tables."""
+    legacy_checkout_ids = {
+        obj.checkout_id
+        for obj in [*build_definitions_buf, *build_runs_buf]
+        if obj.checkout_id
+    }
+    if not legacy_checkout_ids:
+        return
+
+    ids_by_checkout_kci_id = dict(
+        Checkouts.objects.filter(kci_id__in=legacy_checkout_ids).values_list(
+            "kci_id", "id"
+        )
+    )
+    for obj in [*build_definitions_buf, *build_runs_buf]:
+        if obj.checkout_id:
+            obj.checkout_id = ids_by_checkout_kci_id.get(obj.checkout_id)
+
+
 def assign_build_commit_ids(build_runs_buf: list[BuildRuns]) -> None:
     """Denormalize checkout.commit_id onto build_runs for commit-metadata joins."""
     checkout_ids = {build_run.checkout_id for build_run in build_runs_buf}
@@ -460,6 +485,35 @@ def assign_test_payload_run_ids(payloads_buf: list[TestRunPayloads]) -> None:
         )
 
 
+def assign_test_run_hardware_ids(bridge_buf: list[TestRunHardwares]) -> None:
+    test_kci_ids = {
+        getattr(bridge, "_legacy_test_id", None)
+        for bridge in bridge_buf
+        if getattr(bridge, "_legacy_test_id", None)
+    }
+    hardware_names = {
+        getattr(bridge, "_hardware_name", None)
+        for bridge in bridge_buf
+        if getattr(bridge, "_hardware_name", None)
+    }
+    if not test_kci_ids or not hardware_names:
+        return
+
+    test_run_ids_by_kci_id = dict(
+        TestRuns.objects.filter(kci_id__in=test_kci_ids).values_list("kci_id", "id")
+    )
+    hardware_ids_by_name = dict(
+        Hardwares.objects.filter(name__in=hardware_names).values_list("name", "id")
+    )
+    for bridge in bridge_buf:
+        bridge.test_run_id = test_run_ids_by_kci_id.get(
+            getattr(bridge, "_legacy_test_id", None)
+        )
+        bridge.hardware_id = hardware_ids_by_name.get(
+            getattr(bridge, "_hardware_name", None)
+        )
+
+
 def flush_buffers(
     *,
     commits_buf: list[Commits] | None = None,
@@ -469,9 +523,11 @@ def flush_buffers(
     builds_buf: list[Builds],
     build_runs_buf: list[BuildRuns] | None = None,
     build_run_payloads_buf: list[BuildRunPayloads] | None = None,
+    hardwares_buf: list[Hardwares] | None = None,
     test_definitions_buf: list[TestDefinitions] | None = None,
     tests_buf: list[Tests],
     test_runs_buf: list[TestRuns] | None = None,
+    test_run_hardwares_buf: list[TestRunHardwares] | None = None,
     test_run_payloads_buf: list[TestRunPayloads] | None = None,
     incidents_buf: list[Incidents],
     buffer_files: set[tuple[str, str]],
@@ -491,10 +547,14 @@ def flush_buffers(
         build_runs_buf = []
     if build_run_payloads_buf is None:
         build_run_payloads_buf = []
+    if hardwares_buf is None:
+        hardwares_buf = []
     if test_definitions_buf is None:
         test_definitions_buf = []
     if test_runs_buf is None:
         test_runs_buf = []
+    if test_run_hardwares_buf is None:
+        test_run_hardwares_buf = []
     if test_run_payloads_buf is None:
         test_run_payloads_buf = []
 
@@ -506,9 +566,11 @@ def flush_buffers(
         + len(builds_buf)
         + len(build_runs_buf)
         + len(build_run_payloads_buf)
+        + len(hardwares_buf)
         + len(test_definitions_buf)
         + len(tests_buf)
         + len(test_runs_buf)
+        + len(test_run_hardwares_buf)
         + len(test_run_payloads_buf)
         + len(incidents_buf)
     )
@@ -526,6 +588,7 @@ def flush_buffers(
             assign_commit_ids(checkouts_buf)
             consume_buffer(issues_buf, "issues")
             consume_buffer(checkouts_buf, "checkouts")
+            assign_checkout_ids(build_definitions_buf, build_runs_buf)
             consume_buffer(build_definitions_buf, "build_definitions")
             assign_build_definition_ids(build_runs_buf)
             assign_build_commit_ids(build_runs_buf)
@@ -533,11 +596,14 @@ def flush_buffers(
             consume_buffer(build_runs_buf, "build_runs")
             assign_build_payload_run_ids(build_run_payloads_buf)
             consume_buffer(build_run_payloads_buf, "build_run_payloads")
+            consume_buffer(hardwares_buf, "hardwares")
             assign_test_build_definition_ids(test_definitions_buf, test_runs_buf)
             consume_buffer(test_definitions_buf, "test_definitions")
             assign_test_definition_ids(test_runs_buf)
             consume_buffer(tests_buf, "tests")
             consume_buffer(test_runs_buf, "test_runs")
+            assign_test_run_hardware_ids(test_run_hardwares_buf)
+            consume_buffer(test_run_hardwares_buf, "test_run_hardwares")
             assign_test_payload_run_ids(test_run_payloads_buf)
             consume_buffer(test_run_payloads_buf, "test_run_payloads")
             assign_incident_run_ids(incidents_buf)
@@ -569,8 +635,9 @@ def flush_buffers(
         msg = (
             "Flushed batch in %.3fs (%.1f items/s): "
             "commits=%d issues=%d checkouts=%d build_definitions=%d builds=%d "
-            "build_runs=%d build_run_payloads=%d test_definitions=%d tests=%d "
-            "test_runs=%d test_run_payloads=%d incidents=%d"
+            "build_runs=%d build_run_payloads=%d hardwares=%d "
+            "test_definitions=%d tests=%d test_runs=%d test_run_hardwares=%d "
+            "test_run_payloads=%d incidents=%d"
             % (
                 flush_dur,
                 rate,
@@ -581,9 +648,11 @@ def flush_buffers(
                 len(builds_buf),
                 len(build_runs_buf),
                 len(build_run_payloads_buf),
+                len(hardwares_buf),
                 len(test_definitions_buf),
                 len(tests_buf),
                 len(test_runs_buf),
+                len(test_run_hardwares_buf),
                 len(test_run_payloads_buf),
                 len(incidents_buf),
             )
@@ -596,9 +665,11 @@ def flush_buffers(
         builds_buf.clear()
         build_runs_buf.clear()
         build_run_payloads_buf.clear()
+        hardwares_buf.clear()
         test_definitions_buf.clear()
         tests_buf.clear()
         test_runs_buf.clear()
+        test_run_hardwares_buf.clear()
         test_run_payloads_buf.clear()
         incidents_buf.clear()
         buffer_files.clear()
@@ -621,9 +692,11 @@ class SubmissionsInstances(TypedDict):
     builds: list[Builds]
     build_runs: list[BuildRuns]
     build_run_payloads: list[BuildRunPayloads]
+    hardwares: list[Hardwares]
     test_definitions: list[TestDefinitions]
     tests: list[Tests]
     test_runs: list[TestRuns]
+    test_run_hardwares: list[TestRunHardwares]
     test_run_payloads: list[TestRunPayloads]
     incidents: list[Incidents]
 
@@ -648,9 +721,11 @@ def process_batch(
         "builds": [],
         "build_runs": [],
         "build_run_payloads": [],
+        "hardwares": [],
         "test_definitions": [],
         "tests": [],
         "test_runs": [],
+        "test_run_hardwares": [],
         "test_run_payloads": [],
         "incidents": [],
     }
@@ -702,9 +777,11 @@ def process_batch(
             instances_dict["builds"].extend(instances["builds"])
             instances_dict["build_runs"].extend(instances["build_runs"])
             instances_dict["build_run_payloads"].extend(instances["build_run_payloads"])
+            instances_dict["hardwares"].extend(instances["hardwares"])
             instances_dict["test_definitions"].extend(instances["test_definitions"])
             instances_dict["tests"].extend(instances["tests"])
             instances_dict["test_runs"].extend(instances["test_runs"])
+            instances_dict["test_run_hardwares"].extend(instances["test_run_hardwares"])
             instances_dict["test_run_payloads"].extend(instances["test_run_payloads"])
             instances_dict["incidents"].extend(instances["incidents"])
 
@@ -729,6 +806,7 @@ def process_batch(
         instances_dict["build_run_payloads"].sort(
             key=lambda x: getattr(x, "_legacy_build_id", "") or ""
         )
+        instances_dict["hardwares"].sort(key=lambda x: x.name)
         instances_dict["test_definitions"].sort(
             key=lambda x: (
                 getattr(x, "_legacy_build_id", "") or "",
@@ -739,6 +817,12 @@ def process_batch(
         )
         instances_dict["tests"].sort(key=lambda x: x.id)
         instances_dict["test_runs"].sort(key=lambda x: x.id)
+        instances_dict["test_run_hardwares"].sort(
+            key=lambda x: (
+                getattr(x, "_legacy_test_id", "") or "",
+                getattr(x, "_hardware_name", "") or "",
+            )
+        )
         instances_dict["test_run_payloads"].sort(
             key=lambda x: getattr(x, "_legacy_test_id", "") or ""
         )
@@ -780,6 +864,11 @@ def process_batch(
                 if len(instances_dict["build_run_payloads"]) >= INGEST_BATCH_SIZE
                 else []
             ),
+            hardwares_buf=(
+                instances_dict["hardwares"]
+                if len(instances_dict["hardwares"]) >= INGEST_BATCH_SIZE
+                else []
+            ),
             test_definitions_buf=(
                 instances_dict["test_definitions"]
                 if len(instances_dict["test_definitions"]) >= INGEST_BATCH_SIZE
@@ -793,6 +882,11 @@ def process_batch(
             test_runs_buf=(
                 instances_dict["test_runs"]
                 if len(instances_dict["test_runs"]) >= INGEST_BATCH_SIZE
+                else []
+            ),
+            test_run_hardwares_buf=(
+                instances_dict["test_run_hardwares"]
+                if len(instances_dict["test_run_hardwares"]) >= INGEST_BATCH_SIZE
                 else []
             ),
             test_run_payloads_buf=(
@@ -822,9 +916,11 @@ def process_batch(
             builds_buf=instances_dict["builds"],
             build_runs_buf=instances_dict["build_runs"],
             build_run_payloads_buf=instances_dict["build_run_payloads"],
+            hardwares_buf=instances_dict["hardwares"],
             test_definitions_buf=instances_dict["test_definitions"],
             tests_buf=instances_dict["tests"],
             test_runs_buf=instances_dict["test_runs"],
+            test_run_hardwares_buf=instances_dict["test_run_hardwares"],
             test_run_payloads_buf=instances_dict["test_run_payloads"],
             incidents_buf=instances_dict["incidents"],
             buffer_files=buffer_files,

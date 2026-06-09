@@ -272,7 +272,7 @@ def get_issue_first_seen_data(*, issue_id_list: list[str]) -> list[dict]:
                 C.git_repository_branch,
                 C.git_commit_name,
                 C.tree_name,
-                C.id as checkout_id
+                C.kci_id as checkout_id
             FROM
                 incidents IC
             LEFT JOIN tests T ON IC.test_id = T.id
@@ -280,7 +280,7 @@ def get_issue_first_seen_data(*, issue_id_list: list[str]) -> list[dict]:
                 IC.build_id = B.id
                 OR T.build_id = B.id
             )
-            LEFT JOIN checkouts C ON B.checkout_id = C.id
+            LEFT JOIN checkouts C ON B.checkout_id = C.kci_id
             JOIN first_incident FI ON IC.id = FI.id
         """
 

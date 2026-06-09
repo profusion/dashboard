@@ -25,7 +25,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--batch-size", type=int, default=5000)
-        parser.add_argument("--resume-from-id", default="")
+        parser.add_argument("--resume-from-id", type=int, default=0)
         parser.add_argument("--since")
         parser.add_argument("--until")
         parser.add_argument("--dry-run", action="store_true")
@@ -83,10 +83,10 @@ class Command(BaseCommand):
         self,
         *,
         batch_size: int,
-        last_id: str,
+        last_id: int,
         since,
         until,
-    ) -> list[str]:
+    ) -> list[int]:
         clauses = ["git_commit_hash IS NOT NULL", "id > %s"]
         params = [last_id]
 
@@ -112,7 +112,7 @@ class Command(BaseCommand):
             )
             return [row[0] for row in cursor.fetchall()]
 
-    def _upsert_commits(self, checkout_ids: list[str]) -> None:
+    def _upsert_commits(self, checkout_ids: list[int]) -> None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -148,6 +148,14 @@ class Command(BaseCommand):
                         git_repository_url NULLS FIRST,
                         git_repository_branch NULLS FIRST,
                         git_commit_hash,
+                        git_commit_tags IS NULL,
+                        git_commit_name IS NULL,
+                        git_commit_message IS NULL,
+                        git_repository_branch_tip IS NULL,
+                        patchset_files IS NULL,
+                        patchset_hash IS NULL,
+                        message_id IS NULL,
+                        comment IS NULL,
                         _timestamp DESC NULLS LAST
                 )
                 INSERT INTO commits (
@@ -218,7 +226,7 @@ class Command(BaseCommand):
                 [checkout_ids],
             )
 
-    def _link_checkouts(self, checkout_ids: list[str]) -> int:
+    def _link_checkouts(self, checkout_ids: list[int]) -> int:
         with connection.cursor() as cursor:
             cursor.execute(
                 """

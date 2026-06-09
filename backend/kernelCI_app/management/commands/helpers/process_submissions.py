@@ -15,9 +15,11 @@ from kernelCI_app.models import (
     Builds,
     Checkouts,
     Commits,
+    Hardwares,
     Incidents,
     Issues,
     TestDefinitions,
+    TestRunHardwares,
     TestRunPayloads,
     TestRuns,
     Tests,
@@ -36,9 +38,11 @@ class ProcessedSubmission(TypedDict):
     builds: list[Builds]
     build_runs: list[BuildRuns]
     build_run_payloads: list[BuildRunPayloads]
+    hardwares: list[Hardwares]
     test_definitions: list[TestDefinitions]
     tests: list[Tests]
     test_runs: list[TestRuns]
+    test_run_hardwares: list[TestRunHardwares]
     test_run_payloads: list[TestRunPayloads]
     incidents: list[Incidents]
 
@@ -67,9 +71,13 @@ BUILD_DEFINITION_FIELDS = get_model_fields(BuildDefinitions._meta.get_fields()) 
 BUILD_FIELDS = get_model_fields(Builds._meta.get_fields())
 BUILD_RUN_FIELDS = get_model_fields(BuildRuns._meta.get_fields()) - {"id"}
 BUILD_RUN_PAYLOAD_FIELDS = get_model_fields(BuildRunPayloads._meta.get_fields())
+HARDWARE_FIELDS = get_model_fields(Hardwares._meta.get_fields()) - {"id"}
 TEST_DEFINITION_FIELDS = get_model_fields(TestDefinitions._meta.get_fields()) - {"id"}
 TEST_FIELDS = get_model_fields(Tests._meta.get_fields())
 TEST_RUN_FIELDS = get_model_fields(TestRuns._meta.get_fields()) - {"id"}
+TEST_RUN_HARDWARE_FIELDS = get_model_fields(TestRunHardwares._meta.get_fields()) - {
+    "id"
+}
 TEST_RUN_PAYLOAD_FIELDS = get_model_fields(TestRunPayloads._meta.get_fields())
 INCIDENT_FIELDS = get_model_fields(Incidents._meta.get_fields())
 
@@ -135,7 +143,9 @@ def make_issue_instance(issue: dict[str, Any]) -> Issues:
 def make_checkout_instance(
     checkout: dict[str, Any], commit_enrichment: dict[str, Any] | None = None
 ) -> Checkouts:
-    enriched_checkout = checkout | (commit_enrichment or {})
+    enriched_checkout = (
+        checkout | {"kci_id": checkout.get("id")} | (commit_enrichment or {})
+    )
     filtered_checkout = {
         key: value for key, value in enriched_checkout.items() if key in CHECKOUT_FIELDS
     }
@@ -251,6 +261,27 @@ def make_test_run_instance_from_test(test: dict[str, Any]) -> TestRuns:
     return obj
 
 
+def make_hardware_instances_from_test(test: dict[str, Any]) -> list[Hardwares]:
+    compatibles = ((test.get("environment") or {}).get("compatible")) or []
+    return [Hardwares(name=hardware) for hardware in compatibles if hardware]
+
+
+def make_test_run_hardware_instances_from_test(
+    test: dict[str, Any],
+) -> list[TestRunHardwares]:
+    compatibles = ((test.get("environment") or {}).get("compatible")) or []
+    test_id = test.get("id")
+    out = []
+    for hardware_name in compatibles:
+        if not hardware_name:
+            continue
+        obj = TestRunHardwares()
+        obj._legacy_test_id = test_id
+        obj._hardware_name = hardware_name
+        out.append(obj)
+    return out
+
+
 def make_test_run_payload_instance_from_test(test: dict[str, Any]) -> TestRunPayloads:
     flattened_test = flatten_dict_specific(test, ["environment", "number"])
     filtered_payload = {
@@ -293,9 +324,11 @@ def build_instances_from_submission(
         "builds": [],
         "build_runs": [],
         "build_run_payloads": [],
+        "hardwares": [],
         "test_definitions": [],
         "tests": [],
         "test_runs": [],
+        "test_run_hardwares": [],
         "test_run_payloads": [],
         "incidents": [],
     }
@@ -373,6 +406,12 @@ def build_instances_from_submission(
 
                             test_run = make_test_run_instance_from_test(item)
                             out["test_runs"].append(test_run)
+                            out["hardwares"].extend(
+                                make_hardware_instances_from_test(item)
+                            )
+                            out["test_run_hardwares"].extend(
+                                make_test_run_hardware_instances_from_test(item)
+                            )
                             test_payload = make_test_run_payload_instance_from_test(
                                 item
                             )

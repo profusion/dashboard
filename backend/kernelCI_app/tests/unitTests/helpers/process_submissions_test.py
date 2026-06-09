@@ -461,9 +461,11 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
             "builds": [mock_make_build.return_value],
             "build_runs": [mock_make_build_run.return_value],
             "build_run_payloads": [mock_make_build_payload.return_value],
+            "hardwares": [],
             "test_definitions": [mock_make_test_definition.return_value],
             "tests": [mock_make_test.return_value],
             "test_runs": [mock_make_test_run.return_value],
+            "test_run_hardwares": [],
             "test_run_payloads": [mock_make_test_payload.return_value],
             "incidents": [mock_make_incident.return_value],
         }
@@ -549,8 +551,10 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
         self.assertEqual(result["build_definitions"], [])
         self.assertEqual(result["build_runs"], [])
         self.assertEqual(result["build_run_payloads"], [])
+        self.assertEqual(result["hardwares"], [])
         self.assertEqual(result["test_definitions"], [])
         self.assertEqual(result["test_runs"], [])
+        self.assertEqual(result["test_run_hardwares"], [])
         self.assertEqual(result["test_run_payloads"], [])
         self.assertEqual(result["builds"], [mock_make_build.return_value])
         self.assertEqual(result["tests"], [mock_make_test.return_value])
@@ -572,9 +576,11 @@ class TestBuildInstancesFromSubmission(SimpleTestCase):
             "builds": [],
             "build_runs": [],
             "build_run_payloads": [],
+            "hardwares": [],
             "test_definitions": [],
             "tests": [],
             "test_runs": [],
+            "test_run_hardwares": [],
             "test_run_payloads": [],
             "incidents": [],
         }

@@ -27,7 +27,7 @@ class TestGetTreeListingData:
 
         assert result == expected_result
 
-    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="legacy", DB_TREE_READ_PATH="runs")
     @patch("kernelCI_app.queries.tree.dict_fetchall")
     @patch("kernelCI_app.queries.tree.connection")
     def test_get_tree_listing_data_runs_read_path(
@@ -77,7 +77,9 @@ class TestGetTreeListingFast:
 
         assert result == []
 
-    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="commits")
+    @override_settings(
+        DB_SCHEMA_REFACTOR_READ_PATH="legacy", DB_TREE_READ_PATH="commits"
+    )
     @patch("kernelCI_app.queries.tree.get_query_time_interval")
     @patch("kernelCI_app.queries.tree.Checkouts")
     def test_get_tree_listing_fast_commits_read_path(

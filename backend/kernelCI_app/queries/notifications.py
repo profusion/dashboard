@@ -16,7 +16,10 @@ from kernelCI_app.typeModels.metrics_notifications import (
 
 
 def _use_runs_read_path() -> bool:
-    return settings.DB_SCHEMA_REFACTOR_READ_PATH == "runs"
+    read_path = (
+        settings.DB_NOTIFICATION_READ_PATH or settings.DB_SCHEMA_REFACTOR_READ_PATH
+    )
+    return read_path == "runs"
 
 
 def kcidb_execute_query(query, params=None):
@@ -111,7 +114,7 @@ def kcidb_new_issues():
                ROW_NUMBER() OVER (PARTITION BY inc.issue_id ORDER BY inc._timestamp ASC) as incident_rn
            FROM incidents inc
            JOIN builds b ON inc.build_id = b.id
-           JOIN checkouts c ON b.checkout_id = c.id
+           JOIN checkouts c ON b.checkout_id = c.kci_id
            WHERE inc._timestamp >= NOW() - INTERVAL %(interval)s
 
            UNION
@@ -131,7 +134,7 @@ def kcidb_new_issues():
            FROM incidents inc
            JOIN tests t ON inc.test_id = t.id
            JOIN builds b ON t.build_id = b.id
-           JOIN checkouts c ON b.checkout_id = c.id
+           JOIN checkouts c ON b.checkout_id = c.kci_id
            WHERE inc._timestamp >= NOW() - INTERVAL %(interval)s
             AND (t.path = 'boot' OR t.path = 'boot.nfs')
        )
@@ -336,7 +339,7 @@ def kcidb_issue_details(issue_id):
                ROW_NUMBER() OVER (PARTITION BY inc.issue_id ORDER BY inc._timestamp ASC) as incident_rn
            FROM incidents inc
            JOIN builds b ON inc.build_id = b.id
-           JOIN checkouts c ON b.checkout_id = c.id
+           JOIN checkouts c ON b.checkout_id = c.kci_id
            WHERE inc.issue_id = %(issue_id)s
 
            UNION
@@ -356,7 +359,7 @@ def kcidb_issue_details(issue_id):
            FROM incidents inc
            JOIN tests t ON inc.test_id = t.id
            JOIN builds b ON t.build_id = b.id
-           JOIN checkouts c ON b.checkout_id = c.id
+           JOIN checkouts c ON b.checkout_id = c.kci_id
            WHERE inc.issue_id = %(issue_id)s
        )
 
@@ -634,14 +637,14 @@ def kcidb_last_test_without_issue(issue, incident):
         SELECT DISTINCT c.git_commit_hash
         FROM tests t
         JOIN builds b ON t.build_id = b.id
-        JOIN checkouts c ON b.checkout_id = c.id
+        JOIN checkouts c ON b.checkout_id = c.kci_id
         JOIN incidents inc ON inc.test_id = t.id
         WHERE inc.issue_id = %(issue_id)s
      )
     SELECT t.id, t.start_time, c.git_commit_hash
         FROM tests t
         JOIN builds b ON t.build_id = b.id
-        JOIN checkouts c ON b.checkout_id = c.id
+        JOIN checkouts c ON b.checkout_id = c.kci_id
         WHERE c.git_repository_url = %(giturl)s
         AND c.git_repository_branch = %(branch)s
         AND t.environment_misc->>'platform' = %(platform)s
@@ -880,7 +883,7 @@ def kcidb_tests_results(
                     c.git_commit_hash
                 FROM tests t
                     JOIN builds b ON t.build_id = b.id
-                    JOIN checkouts c ON b.checkout_id = c.id
+                    JOIN checkouts c ON b.checkout_id = c.kci_id
                 WHERE t.origin = %(origin)s
                     AND c.git_repository_url = %(giturl)s
                     AND c.git_repository_branch = %(branch)s

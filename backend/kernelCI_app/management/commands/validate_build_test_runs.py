@@ -23,6 +23,9 @@ class Command(BaseCommand):
         if sample_size < 0:
             raise CommandError("--sample-size must be zero or greater")
 
+        with connection.cursor() as cursor:
+            cursor.execute("SET max_parallel_workers_per_gather = 0")
+
         phase: Phase = options["phase"]
         has_mismatch = False
 
@@ -46,13 +49,23 @@ class Command(BaseCommand):
             """
             SELECT
                 COUNT(*) AS legacy_builds,
+                COUNT(*) FILTER (WHERE checkouts.id IS NOT NULL) AS eligible_builds,
+                COUNT(*) FILTER (WHERE checkouts.id IS NULL) AS orphan_builds,
                 (SELECT COUNT(*) FROM build_runs) AS build_runs,
-                COUNT(*) FILTER (WHERE build_runs.kci_id IS NULL) AS missing_runs,
+                (SELECT COUNT(*) FROM build_run_payloads) AS build_run_payloads,
+                COUNT(*) FILTER (
+                    WHERE checkouts.id IS NOT NULL
+                        AND build_runs.kci_id IS NULL
+                ) AS missing_runs,
+                COUNT(*) FILTER (
+                    WHERE build_runs.kci_id IS NOT NULL
+                        AND build_run_payloads.build_run_id IS NULL
+                ) AS missing_payloads,
                 COUNT(*) FILTER (
                     WHERE build_runs.kci_id IS NOT NULL
                         AND NOT (
-                            build_runs.checkout_id = builds.checkout_id
-                            AND build_definitions.checkout_id = builds.checkout_id
+                            build_runs.checkout_id = checkouts.id
+                            AND build_definitions.checkout_id = checkouts.id
                             AND build_definitions.series = builds.series
                             AND build_runs.commit_id IS NOT DISTINCT FROM
                                 checkouts.commit_id
@@ -62,7 +75,9 @@ class Command(BaseCommand):
             LEFT JOIN build_runs ON build_runs.kci_id = builds.id
             LEFT JOIN build_definitions
                 ON build_definitions.id = build_runs.build_definition_id
-            LEFT JOIN checkouts ON checkouts.id = builds.checkout_id
+            LEFT JOIN checkouts ON checkouts.kci_id = builds.checkout_id
+            LEFT JOIN build_run_payloads
+                ON build_run_payloads.build_run_id = build_runs.id
             """
         )
         self._print_summary("builds", summary)
@@ -70,11 +85,13 @@ class Command(BaseCommand):
             """
             SELECT
                 builds.id AS legacy_id,
-                builds.checkout_id AS legacy_checkout_id,
+                builds.checkout_id AS legacy_checkout_kci_id,
+                checkouts.id AS checkout_id,
                 builds.series AS legacy_series,
                 build_runs.kci_id AS run_kci_id,
                 build_runs.checkout_id AS run_checkout_id,
                 build_runs.commit_id AS run_commit_id,
+                build_run_payloads.build_run_id AS payload_build_run_id,
                 build_definitions.checkout_id AS definition_checkout_id,
                 build_definitions.series AS definition_series,
                 checkouts.commit_id AS checkout_commit_id
@@ -82,13 +99,19 @@ class Command(BaseCommand):
             LEFT JOIN build_runs ON build_runs.kci_id = builds.id
             LEFT JOIN build_definitions
                 ON build_definitions.id = build_runs.build_definition_id
-            LEFT JOIN checkouts ON checkouts.id = builds.checkout_id
-            WHERE build_runs.kci_id IS NULL
-                OR NOT (
-                    build_runs.checkout_id = builds.checkout_id
-                    AND build_definitions.checkout_id = builds.checkout_id
-                    AND build_definitions.series = builds.series
-                    AND build_runs.commit_id IS NOT DISTINCT FROM checkouts.commit_id
+            LEFT JOIN checkouts ON checkouts.kci_id = builds.checkout_id
+            LEFT JOIN build_run_payloads
+                ON build_run_payloads.build_run_id = build_runs.id
+            WHERE checkouts.id IS NOT NULL
+                AND (
+                    build_runs.kci_id IS NULL
+                    OR build_run_payloads.build_run_id IS NULL
+                    OR NOT (
+                        build_runs.checkout_id = checkouts.id
+                        AND build_definitions.checkout_id = checkouts.id
+                        AND build_definitions.series = builds.series
+                        AND build_runs.commit_id IS NOT DISTINCT FROM checkouts.commit_id
+                    )
                 )
             ORDER BY builds.id
             LIMIT %s
@@ -96,7 +119,11 @@ class Command(BaseCommand):
             sample_size,
         )
         self._print_samples("build samples", samples)
-        return bool(summary["missing_runs"] or summary["mismatched_runs"])
+        return bool(
+            summary["missing_runs"]
+            or summary["missing_payloads"]
+            or summary["mismatched_runs"]
+        )
 
     def _validate_tests(self, sample_size: int) -> bool:
         summary = self._fetch_one(
@@ -106,10 +133,37 @@ class Command(BaseCommand):
                 COUNT(*) FILTER (WHERE build_runs.kci_id IS NOT NULL) AS eligible_tests,
                 COUNT(*) FILTER (WHERE build_runs.kci_id IS NULL) AS orphan_tests,
                 (SELECT COUNT(*) FROM test_runs) AS test_runs,
+                (SELECT COUNT(*) FROM test_run_payloads) AS test_run_payloads,
+                (
+                    SELECT COALESCE(SUM(cardinality(t.environment_compatible)), 0)
+                    FROM tests t
+                    JOIN build_runs br ON br.kci_id = t.build_id
+                ) AS expected_hardware_links,
+                (SELECT COUNT(*) FROM test_run_hardwares) AS test_run_hardwares,
                 COUNT(*) FILTER (
                     WHERE build_runs.kci_id IS NOT NULL
                         AND test_runs.kci_id IS NULL
                 ) AS missing_runs,
+                COUNT(*) FILTER (
+                    WHERE build_runs.kci_id IS NOT NULL
+                        AND test_runs.kci_id IS NOT NULL
+                        AND test_run_payloads.test_run_id IS NULL
+                ) AS missing_payloads,
+                (
+                    SELECT COUNT(*)
+                    FROM tests t
+                    JOIN build_runs br ON br.kci_id = t.build_id
+                    JOIN test_runs tr ON tr.kci_id = t.id
+                    CROSS JOIN LATERAL unnest(t.environment_compatible) AS compat(
+                        hardware
+                    )
+                    LEFT JOIN hardwares h ON h.name = compat.hardware
+                    LEFT JOIN test_run_hardwares trh
+                        ON trh.test_run_id = tr.id
+                        AND trh.hardware_id = h.id
+                    WHERE compat.hardware IS NOT NULL
+                        AND trh.test_run_id IS NULL
+                ) AS missing_hardware_links,
                 COUNT(*) FILTER (
                     WHERE test_runs.kci_id IS NOT NULL
                         AND NOT (
@@ -127,6 +181,8 @@ class Command(BaseCommand):
             LEFT JOIN test_runs ON test_runs.kci_id = tests.id
             LEFT JOIN test_definitions
                 ON test_definitions.id = test_runs.test_definition_id
+            LEFT JOIN test_run_payloads
+                ON test_run_payloads.test_run_id = test_runs.id
             """
         )
         self._print_summary("tests", summary)
@@ -139,6 +195,8 @@ class Command(BaseCommand):
                 test_runs.kci_id AS run_kci_id,
                 test_runs.build_run_id AS run_build_id,
                 test_runs.checkout_id AS run_checkout_id,
+                test_run_payloads.test_run_id AS payload_test_run_id,
+                compatible_hardware.hardware AS missing_hardware,
                 build_runs.checkout_id AS build_checkout_id,
                 test_definitions.path AS definition_path
             FROM tests
@@ -146,9 +204,24 @@ class Command(BaseCommand):
             LEFT JOIN test_runs ON test_runs.kci_id = tests.id
             LEFT JOIN test_definitions
                 ON test_definitions.id = test_runs.test_definition_id
+            LEFT JOIN test_run_payloads
+                ON test_run_payloads.test_run_id = test_runs.id
+            LEFT JOIN LATERAL unnest(tests.environment_compatible) AS compatible_hardware(
+                hardware
+            ) ON TRUE
+            LEFT JOIN hardwares
+                ON hardwares.name = compatible_hardware.hardware
+            LEFT JOIN test_run_hardwares
+                ON test_run_hardwares.test_run_id = test_runs.id
+                AND test_run_hardwares.hardware_id = hardwares.id
             WHERE build_runs.kci_id IS NOT NULL
                 AND (
                     test_runs.kci_id IS NULL
+                    OR test_run_payloads.test_run_id IS NULL
+                    OR (
+                        compatible_hardware.hardware IS NOT NULL
+                        AND test_run_hardwares.test_run_id IS NULL
+                    )
                     OR NOT (
                         test_runs.build_run_id = build_runs.id
                         AND test_runs.checkout_id = build_runs.checkout_id
@@ -165,7 +238,12 @@ class Command(BaseCommand):
             sample_size,
         )
         self._print_samples("test samples", samples)
-        return bool(summary["missing_runs"] or summary["mismatched_runs"])
+        return bool(
+            summary["missing_runs"]
+            or summary["missing_payloads"]
+            or summary["missing_hardware_links"]
+            or summary["mismatched_runs"]
+        )
 
     def _validate_incidents(self) -> bool:
         summary = self._fetch_one(

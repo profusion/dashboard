@@ -41,7 +41,7 @@ def get_build_details(build_id: str) -> Optional[list[dict]]:
             "git_commit_tags",
             "origin",
         ],
-        condition="checkouts.id = builds.checkout_id",
+        condition="checkouts.kci_id = builds.checkout_id",
     )
     query.where(**{"builds.id__eq": build_id})
 

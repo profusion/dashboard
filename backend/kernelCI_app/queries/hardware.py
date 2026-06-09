@@ -12,21 +12,134 @@ from kernelCI_app.queries.duration import (
 )
 from kernelCI_app.typeModels.hardwareDetails import CommitHead, Tree
 
-
-def _use_runs_read_path() -> bool:
-    return settings.DB_SCHEMA_REFACTOR_READ_PATH == "runs"
+HARDWARE_DETAILS_BRIDGE_LINK_THRESHOLD = 50_000
 
 
-def _get_hardware_tree_heads_clause(*, id_only: bool) -> str:
+def _get_read_path(setting_name: str) -> str:
+    return getattr(settings, setting_name) or settings.DB_SCHEMA_REFACTOR_READ_PATH
+
+
+def _use_hardware_listing_runs_read_path() -> bool:
+    return _get_read_path("DB_HARDWARE_LISTING_READ_PATH") == "runs"
+
+
+def _use_hardware_details_runs_read_path() -> bool:
+    return _get_read_path("DB_HARDWARE_DETAILS_READ_PATH") == "runs"
+
+
+def _use_hardware_trees_runs_read_path() -> bool:
+    return _get_read_path("DB_HARDWARE_TREES_READ_PATH") == "runs"
+
+
+def _should_use_hardware_details_bridge(hardware_id: str) -> bool:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT 1
+                FROM hardwares
+                INNER JOIN test_run_hardwares ON
+                    test_run_hardwares.hardware_id = hardwares.id
+                WHERE hardwares.name = %s
+                LIMIT %s
+            ) AS hardware_links
+            """,
+            [hardware_id, HARDWARE_DETAILS_BRIDGE_LINK_THRESHOLD + 1],
+        )
+        (link_count,) = cursor.fetchone()
+
+    return 0 < link_count <= HARDWARE_DETAILS_BRIDGE_LINK_THRESHOLD
+
+
+def _get_hardware_details_matching_tests_ctes(*, use_bridge: bool) -> str:
+    if use_bridge:
+        return """
+           matching_hardware AS MATERIALIZED (
+             SELECT id
+             FROM hardwares
+             WHERE name = %(platform)s
+           ),
+           matching_tests AS MATERIALIZED (
+             SELECT DISTINCT
+                 tests.id,
+                 tests.build_run_id,
+                 tests.status,
+                 tests.environment_compatible,
+                 tests.lab,
+                 tests.platform,
+                 tests.is_boot,
+                 tests.duration
+             FROM
+                selected_builds AS builds
+            INNER JOIN test_runs AS tests ON
+                tests.build_run_id = builds.id
+            INNER JOIN test_run_hardwares AS test_hardware ON
+                test_hardware.test_run_id = tests.id
+            INNER JOIN matching_hardware AS hardware ON
+                hardware.id = test_hardware.hardware_id
+            WHERE
+                tests.origin = %(origin)s
+                AND tests.start_time >= %(start_date)s
+                AND tests.start_time <= %(end_date)s
+            UNION
+             SELECT
+                 tests.id,
+                 tests.build_run_id,
+                 tests.status,
+                 tests.environment_compatible,
+                 tests.lab,
+                 tests.platform,
+                 tests.is_boot,
+                 tests.duration
+             FROM
+                selected_builds AS builds
+            INNER JOIN test_runs AS tests ON
+                tests.build_run_id = builds.id
+            WHERE
+                tests.platform = %(platform)s
+                AND tests.origin = %(origin)s
+                AND tests.start_time >= %(start_date)s
+                AND tests.start_time <= %(end_date)s
+           )"""
+
+    return """
+           matching_tests AS MATERIALIZED (
+             SELECT
+                 tests.id,
+                 tests.build_run_id,
+                 tests.status,
+                 tests.environment_compatible,
+                 tests.lab,
+                 tests.platform,
+                 tests.is_boot,
+                 tests.duration
+             FROM
+                selected_builds AS builds
+            INNER JOIN test_runs AS tests ON
+                tests.build_run_id = builds.id
+            WHERE
+                (
+                    tests.environment_compatible @> ARRAY[%(platform)s]::TEXT[]
+                    OR tests.platform = %(platform)s
+                )
+                AND tests.origin = %(origin)s
+                AND tests.start_time >= %(start_date)s
+                AND tests.start_time <= %(end_date)s
+           )"""
+
+
+def _get_hardware_tree_heads_clause(*, id_only: bool, integer_id: bool = False) -> str:
     """Returns the tree_heads for the hardware queries,
     where the checkout is not filtered by origin.
 
     This is done because tests from a origin can be
     related to checkouts from another origin."""
+    checkout_id_expression = "C.id" if integer_id else "C.kci_id"
     if id_only is True:
-        fields = "C.id"
+        fields = f"{checkout_id_expression} AS id"
     else:
-        fields = """C.id,
+        fields = f"""{checkout_id_expression} AS id,
                     C.origin,
                     C.tree_name,
                     C.start_time,
@@ -209,7 +322,7 @@ def get_hardware_listing_data(
     separated request values can be full SHAs or tag strings stored on checkouts).
     Still scoped by the test start_time and origin filters below.
     """
-    if _use_runs_read_path():
+    if _use_hardware_listing_runs_read_path():
         return _get_hardware_listing_data_from_runs(
             start_date=start_date,
             end_date=end_date,
@@ -228,7 +341,7 @@ def get_hardware_listing_data(
     if commits_list:
         params["commits_list"] = commits_list
         checkout_ids_select = """
-            SELECT C.id
+            SELECT C.kci_id
             FROM checkouts C
             WHERE C.git_commit_hash = ANY(%(commits_list)s)
                OR (
@@ -318,7 +431,9 @@ def _get_hardware_listing_data_from_runs(
                )
             """
     else:
-        checkout_ids_select = _get_hardware_tree_heads_clause(id_only=True)
+        checkout_ids_select = _get_hardware_tree_heads_clause(
+            id_only=True, integer_id=True
+        )
 
     selected_checkouts_cte = f"""
             selected_checkouts AS (
@@ -372,7 +487,7 @@ def get_hardware_listing_data_bulk(
 ) -> list[dict]:
     if not keys:
         return []
-    if _use_runs_read_path():
+    if _use_hardware_listing_runs_read_path():
         return _get_hardware_listing_data_bulk_from_runs(
             keys=keys,
             start_date=start_date,
@@ -566,7 +681,7 @@ def get_hardware_listing_data_from_status_table(
         INNER JOIN
             checkouts C
             ON
-                hardware_status.checkout_id = C.id
+                hardware_status.checkout_id = C.kci_id
             AND
                 C.start_time >= %(start_date)s
             AND
@@ -678,7 +793,7 @@ def get_hardware_details_summary(
     if tests_duration is None:
         tests_duration = (None, None)
 
-    if _use_runs_read_path():
+    if _use_hardware_details_runs_read_path():
         return _get_hardware_details_summary_from_runs(
             hardware_id=hardware_id,
             origin=origin,
@@ -741,7 +856,7 @@ def get_hardware_details_summary(
             INNER JOIN tests ON
                 tests.build_id = builds.id
             INNER JOIN checkouts ON
-                builds.checkout_id = checkouts.id
+                builds.checkout_id = checkouts.kci_id
             LEFT OUTER JOIN incidents ON
                 builds.id = incidents.build_id
             WHERE
@@ -767,7 +882,7 @@ def get_hardware_details_summary(
                      as known_issues,
                  array[builds.compiler, builds.architecture] AS compiler_arch,
                  builds.config_name,
-                 tests.lab,
+                 tests.misc->>'runtime' AS lab,
                  tests.environment_misc->>'platform' AS platform,
                  tests.environment_compatible,
                  checkouts.origin,
@@ -785,7 +900,7 @@ def get_hardware_details_summary(
             INNER JOIN tests ON
                 tests.build_id = builds.id
             INNER JOIN checkouts ON
-                builds.checkout_id = checkouts.id
+                builds.checkout_id = checkouts.kci_id
             LEFT OUTER JOIN incidents ON
                 tests.id = incidents.test_id
             WHERE
@@ -861,6 +976,9 @@ def _get_hardware_details_summary_from_runs(
     boots_tests_duration_clause = _get_runs_boot_test_duration_clause(
         boots_duration, tests_duration, table_alias="matching_tests"
     )
+    matching_tests_ctes = _get_hardware_details_matching_tests_ctes(
+        use_bridge=_should_use_hardware_details_bridge(hardware_id)
+    )
 
     query = """
            WITH selected_builds AS MATERIALIZED (
@@ -888,29 +1006,7 @@ def _get_hardware_details_summary_from_runs(
             WHERE
                 commits.git_commit_hash = ANY(%(commits)s)
            ),
-           matching_tests AS MATERIALIZED (
-             SELECT
-                 tests.id,
-                 tests.build_run_id,
-                 tests.status,
-                 tests.environment_compatible,
-                 tests.lab,
-                 tests.platform,
-                 tests.is_boot,
-                 tests.duration
-             FROM
-                selected_builds AS builds
-            INNER JOIN test_runs AS tests ON
-                tests.build_run_id = builds.id
-            WHERE
-                (
-                    tests.environment_compatible @> ARRAY[%(platform)s]::TEXT[]
-                    OR tests.platform = %(platform)s
-                )
-                AND tests.origin = %(origin)s
-                AND tests.start_time >= %(start_date)s
-                AND tests.start_time <= %(end_date)s
-           ),
+           {0},
            build_groups AS MATERIALIZED (
              SELECT
                  matching_tests.build_run_id,
@@ -936,7 +1032,7 @@ def _get_hardware_details_summary_from_runs(
                 AND builds.origin = %(origin)s
                 AND builds.start_time >= %(start_date)s
                 AND builds.start_time <= %(end_date)s
-                {0}
+                {1}
             GROUP BY
                 matching_tests.build_run_id,
                 matching_tests.environment_compatible,
@@ -960,7 +1056,7 @@ def _get_hardware_details_summary_from_runs(
                 matching_tests.id = incidents.test_run_id
             WHERE
                 TRUE
-                {1}
+                {2}
             GROUP BY
                 matching_tests.build_run_id,
                 matching_tests.status,
@@ -1027,6 +1123,7 @@ def _get_hardware_details_summary_from_runs(
             INNER JOIN build_definitions ON
                 builds.build_definition_id = build_definitions.id);
     """.format(
+        matching_tests_ctes,
         builds_duration_clause,
         boots_tests_duration_clause,
     )
@@ -1059,7 +1156,7 @@ def _get_hardware_details_summary_from_runs(
 def query_records(
     *, hardware_id: str, origin: str, trees: list[Tree], start_date: int, end_date: int
 ) -> list[dict] | None:
-    if _use_runs_read_path():
+    if _use_hardware_details_runs_read_path():
         return _query_records_from_runs(
             hardware_id=hardware_id,
             origin=origin,
@@ -1074,24 +1171,24 @@ def query_records(
             SELECT
                 tests.id,
                 tests.origin AS test_origin,
-                test_payloads.environment_misc,
+                tests.environment_misc,
                 tests.path,
-                test_payloads.comment,
-                test_payloads.log_url,
+                tests.comment,
+                tests.log_url,
                 tests.status,
                 tests.start_time,
                 tests.duration,
-                test_payloads.misc,
+                tests.misc,
                 tests.build_id,
                 tests.environment_compatible,
                 builds.architecture AS build__architecture,
                 builds.config_name AS build__config_name,
-                build_payloads.misc AS build__misc,
-                build_payloads.config_url AS build__config_url,
+                builds.misc AS build__misc,
+                builds.config_url AS build__config_url,
                 builds.compiler AS build__compiler,
                 builds.status AS build__status,
                 builds.duration AS build__duration,
-                build_payloads.log_url AS build__log_url,
+                builds.log_url AS build__log_url,
                 builds.start_time AS build__start_time,
                 builds.origin AS build__origin,
                 checkouts.git_repository_url AS build__checkout__git_repository_url,
@@ -1113,7 +1210,7 @@ def query_records(
             INNER JOIN builds ON
                 tests.build_id = builds.id
             INNER JOIN checkouts ON
-                builds.checkout_id = checkouts.id
+                builds.checkout_id = checkouts.kci_id
             LEFT OUTER JOIN incidents ON
                 tests.id = incidents.test_id
             LEFT OUTER JOIN issues ON
@@ -1276,7 +1373,7 @@ def get_hardware_summary_data(
     """
     if not keys:
         return []
-    if _use_runs_read_path():
+    if _use_hardware_details_runs_read_path():
         return _get_hardware_summary_data_from_runs(
             keys=keys,
             start_date=start_date,
@@ -1297,24 +1394,24 @@ def get_hardware_summary_data(
             SELECT
                 tests.id,
                 tests.origin AS test_origin,
-                test_payloads.environment_misc,
+                tests.environment_misc,
                 tests.path,
-                test_payloads.comment,
-                test_payloads.log_url,
+                tests.comment,
+                tests.log_url,
                 tests.status,
                 tests.start_time,
                 tests.duration,
-                test_payloads.misc,
+                tests.misc,
                 tests.build_id,
                 tests.environment_compatible,
                 builds.architecture,
                 builds.config_name,
-                build_payloads.misc AS build_misc,
-                build_payloads.config_url,
+                builds.misc AS build_misc,
+                builds.config_url,
                 builds.compiler,
                 builds.status AS build_status,
                 builds.duration AS build_duration,
-                build_payloads.log_url AS build_log_url,
+                builds.log_url AS build_log_url,
                 builds.start_time AS build_start_time,
                 builds.origin AS build_origin,
                 checkouts.git_repository_url,
@@ -1328,7 +1425,7 @@ def get_hardware_summary_data(
             INNER JOIN builds ON
                 tests.build_id = builds.id
             INNER JOIN checkouts ON
-                builds.checkout_id = checkouts.id
+                builds.checkout_id = checkouts.kci_id
             WHERE
                 tests.start_time >= %s
                 AND tests.start_time <= %s
@@ -1450,7 +1547,7 @@ def get_hardware_trees_head_commits(
     start_datetime: datetime,
     end_datetime: datetime,
 ) -> list[tuple[str, str]]:
-    if _use_runs_read_path():
+    if _use_hardware_trees_runs_read_path():
         return _get_hardware_trees_head_commits_from_runs(
             hardware_id=hardware_id,
             origin=origin,
@@ -1555,7 +1652,7 @@ def _get_hardware_trees_head_commits_from_runs(
     if trees:
         return trees
 
-    tree_head_clause = _get_hardware_tree_heads_clause(id_only=False)
+    tree_head_clause = _get_hardware_tree_heads_clause(id_only=False, integer_id=True)
 
     query = f"""
     WITH
@@ -1617,7 +1714,7 @@ def get_hardware_trees_data(
     start_datetime: datetime,
     end_datetime: datetime,
 ) -> list[Tree]:
-    if _use_runs_read_path():
+    if _use_hardware_trees_runs_read_path():
         return _get_hardware_trees_data_from_runs(
             hardware_id=hardware_id,
             origin=origin,
@@ -1725,7 +1822,7 @@ def _get_hardware_trees_data_from_runs(
 
     trees: list[Tree] = get_query_cache(cache_key, params)
 
-    tree_head_clause = _get_hardware_tree_heads_clause(id_only=False)
+    tree_head_clause = _get_hardware_tree_heads_clause(id_only=False, integer_id=True)
 
     if not trees:
         query = f"""

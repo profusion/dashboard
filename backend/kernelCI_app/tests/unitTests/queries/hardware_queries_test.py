@@ -41,7 +41,9 @@ class TestGetHardwareListingData:
         assert result == expected_result
         mock_cursor.execute.assert_called_once()
 
-    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @override_settings(
+        DB_SCHEMA_REFACTOR_READ_PATH="legacy", DB_HARDWARE_LISTING_READ_PATH="runs"
+    )
     @patch("kernelCI_app.queries.hardware.connection")
     def test_get_hardware_listing_data_runs_read_path(self, mock_connection):
         mock_cursor = setup_mock_cursor(mock_connection)
@@ -148,6 +150,45 @@ class TestGetHardwareTreesData:
         assert result[0].tree_name == "mainline"
         mock_set_cache.assert_called_once()
 
+    @override_settings(
+        DB_SCHEMA_REFACTOR_READ_PATH="legacy", DB_HARDWARE_TREES_READ_PATH="runs"
+    )
+    @patch("kernelCI_app.queries.hardware.get_query_cache")
+    @patch("kernelCI_app.queries.hardware.set_query_cache")
+    @patch("kernelCI_app.queries.hardware.dict_fetchall")
+    @patch("kernelCI_app.queries.hardware.connection")
+    def test_get_hardware_trees_data_runs_read_path(
+        self, mock_connection, mock_dict_fetchall, mock_set_cache, mock_get_cache
+    ):
+        tree_records = [
+            {
+                "tree_name": "mainline",
+                "origin": "maestro",
+                "git_repository_branch": "master",
+                "git_repository_url": "https://my_url.com",
+                "git_commit_name": "v6.1",
+                "git_commit_hash": "abc123",
+                "git_commit_tags": None,
+            }
+        ]
+        mock_get_cache.return_value = None
+        mock_dict_fetchall.return_value = tree_records
+        mock_cursor = setup_mock_cursor(mock_connection)
+
+        result = get_hardware_trees_data(
+            hardware_id="hardware",
+            origin="maestro",
+            start_datetime=START_DATE,
+            end_datetime=END_DATE,
+        )
+
+        query = mock_cursor.execute.call_args.args[0]
+        assert len(result) == 1
+        assert "test_runs AS tests" in query
+        assert "tests.checkout_id = TH.id" in query
+        assert "tests.platform = %(hardware)s" in query
+        mock_set_cache.assert_called_once()
+
 
 class TestGenerateQueryParams:
     def test_generate_query_params_single_commit(self):
@@ -245,7 +286,9 @@ class TestQueryRecords:
         assert result == expected_result
         mock_cursor.execute.assert_called_once()
 
-    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @override_settings(
+        DB_SCHEMA_REFACTOR_READ_PATH="legacy", DB_HARDWARE_DETAILS_READ_PATH="runs"
+    )
     @patch("kernelCI_app.queries.hardware.dict_fetchall")
     @patch("kernelCI_app.queries.hardware.connection")
     def test_query_records_runs_read_path(self, mock_connection, mock_dict_fetchall):
@@ -276,7 +319,7 @@ class TestGetHardwareDetailsSummary:
     @patch("kernelCI_app.queries.hardware.set_query_cache")
     @patch("kernelCI_app.queries.hardware.dict_fetchall")
     @patch("kernelCI_app.queries.hardware.connection")
-    def test_get_hardware_details_summary_runs_read_path(
+    def test_get_hardware_details_summary_runs_read_path_uses_array_for_common_hardware(
         self,
         mock_connection,
         mock_dict_fetchall,
@@ -286,6 +329,7 @@ class TestGetHardwareDetailsSummary:
         mock_get_cache.return_value = None
         mock_dict_fetchall.return_value = []
         mock_cursor = setup_mock_cursor(mock_connection)
+        mock_cursor.fetchone.return_value = (50001,)
 
         get_hardware_details_summary(
             hardware_id="hardware",
@@ -304,7 +348,42 @@ class TestGetHardwareDetailsSummary:
         assert "test_groups.is_boot" in query
         assert "incidents.build_run_id" in query
         assert "incidents.test_run_id" in query
+        assert "tests.environment_compatible @> ARRAY[%(platform)s]::TEXT[]" in query
+        assert "test_run_hardwares AS test_hardware" not in query
         assert "environment_misc->>'platform'" not in query
+        mock_set_cache.assert_called_once()
+
+    @override_settings(DB_SCHEMA_REFACTOR_READ_PATH="runs")
+    @patch("kernelCI_app.queries.hardware.get_query_cache")
+    @patch("kernelCI_app.queries.hardware.set_query_cache")
+    @patch("kernelCI_app.queries.hardware.dict_fetchall")
+    @patch("kernelCI_app.queries.hardware.connection")
+    def test_get_hardware_details_summary_runs_read_path_uses_bridge_for_rare_hardware(
+        self,
+        mock_connection,
+        mock_dict_fetchall,
+        mock_set_cache,
+        mock_get_cache,
+    ):
+        mock_get_cache.return_value = None
+        mock_dict_fetchall.return_value = []
+        mock_cursor = setup_mock_cursor(mock_connection)
+        mock_cursor.fetchone.return_value = (10,)
+
+        get_hardware_details_summary(
+            hardware_id="hardware",
+            origin="maestro",
+            commit_hashes=["abc123"],
+            start_datetime=START_DATE,
+            end_datetime=END_DATE,
+        )
+
+        query = mock_cursor.execute.call_args.args[0]
+        assert "matching_hardware AS MATERIALIZED" in query
+        assert "test_run_hardwares AS test_hardware" in query
+        assert (
+            "tests.environment_compatible @> ARRAY[%(platform)s]::TEXT[]" not in query
+        )
         mock_set_cache.assert_called_once()
 
 

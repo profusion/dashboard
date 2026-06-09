@@ -105,7 +105,8 @@ class Checkouts(models.Model):
         blank=True,
         on_delete=models.DO_NOTHING,
     )
-    id = models.TextField(primary_key=True)
+    id = models.BigAutoField(primary_key=True)
+    kci_id = models.TextField(unique=True)
     origin = models.TextField()
     tree_name = models.TextField(blank=True, null=True)
     git_repository_url = models.TextField(blank=True, null=True)
@@ -152,7 +153,10 @@ class Builds(models.Model):
         db_column="_timestamp", blank=True, null=True
     )
     checkout = models.ForeignKey(
-        Checkouts, db_constraint=False, on_delete=models.DO_NOTHING
+        Checkouts,
+        db_constraint=False,
+        on_delete=models.DO_NOTHING,
+        to_field="kci_id",
     )
     id = models.TextField(primary_key=True)
     origin = models.TextField()
@@ -205,7 +209,9 @@ class BuildDefinitions(models.Model):
         db_column="_timestamp", blank=True, null=True
     )
     checkout = models.ForeignKey(
-        Checkouts, db_constraint=False, on_delete=models.DO_NOTHING
+        Checkouts,
+        db_constraint=False,
+        on_delete=models.DO_NOTHING,
     )
     origin = models.TextField()
     architecture = models.TextField(blank=True, null=True)
@@ -241,7 +247,9 @@ class BuildRuns(models.Model):
         BuildDefinitions, db_constraint=False, on_delete=models.DO_NOTHING
     )
     checkout = models.ForeignKey(
-        Checkouts, db_constraint=False, on_delete=models.DO_NOTHING
+        Checkouts,
+        db_constraint=False,
+        on_delete=models.DO_NOTHING,
     )
     commit = models.ForeignKey(
         Commits,
@@ -417,7 +425,10 @@ class TestRuns(models.Model):
         BuildRuns, db_constraint=False, on_delete=models.DO_NOTHING
     )
     checkout = models.ForeignKey(
-        Checkouts, db_constraint=False, db_index=False, on_delete=models.DO_NOTHING
+        Checkouts,
+        db_constraint=False,
+        db_index=False,
+        on_delete=models.DO_NOTHING,
     )
     origin = models.TextField()
     platform = models.TextField(blank=True, null=True)
@@ -459,6 +470,44 @@ class TestRuns(models.Model):
             ),
             models.Index(fields=["start_time"], name="test_runs_start_time"),
             models.Index(fields=["status"], name="test_runs_status"),
+        ]
+
+
+class Hardwares(models.Model):
+    name = models.TextField(unique=True)
+
+    class Meta:
+        db_table = "hardwares"
+        indexes = [
+            models.Index(fields=["name"], name="hardwares_name"),
+        ]
+
+
+class TestRunHardwares(models.Model):
+    test_run = models.ForeignKey(
+        TestRuns, db_constraint=False, on_delete=models.DO_NOTHING
+    )
+    hardware = models.ForeignKey(
+        Hardwares, db_constraint=False, on_delete=models.DO_NOTHING
+    )
+
+    class Meta:
+        db_table = "test_run_hardwares"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["test_run", "hardware"],
+                name="test_run_hardwares_unique",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["hardware", "test_run"],
+                name="test_run_hw_hardware_test",
+            ),
+            models.Index(
+                fields=["test_run", "hardware"],
+                name="test_run_hw_test_hardware",
+            ),
         ]
 
 

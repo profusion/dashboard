@@ -7,9 +7,11 @@ from kernelCI_app.models import (
     Builds,
     Checkouts,
     Commits,
+    Hardwares,
     Incidents,
     Issues,
     TestDefinitions,
+    TestRunHardwares,
     TestRunPayloads,
     TestRuns,
     Tests,
@@ -23,9 +25,11 @@ type TableNames = Literal[
     "builds",
     "build_runs",
     "build_run_payloads",
+    "hardwares",
     "test_definitions",
     "tests",
     "test_runs",
+    "test_run_hardwares",
     "test_run_payloads",
     "incidents",
 ]
@@ -37,9 +41,11 @@ type TableModels = (
     | Builds
     | BuildRuns
     | BuildRunPayloads
+    | Hardwares
     | TestDefinitions
     | Tests
     | TestRuns
+    | TestRunHardwares
     | TestRunPayloads
     | Incidents
 )
@@ -51,9 +57,11 @@ type TableModelsClass = (
     | Type[Builds]
     | Type[BuildRuns]
     | Type[BuildRunPayloads]
+    | Type[Hardwares]
     | Type[TestDefinitions]
     | Type[Tests]
     | Type[TestRuns]
+    | Type[TestRunHardwares]
     | Type[TestRunPayloads]
     | Type[Incidents]
 )
@@ -66,9 +74,11 @@ MODEL_MAP: dict[TableNames, TableModelsClass] = {
     "builds": Builds,
     "build_runs": BuildRuns,
     "build_run_payloads": BuildRunPayloads,
+    "hardwares": Hardwares,
     "test_definitions": TestDefinitions,
     "tests": Tests,
     "test_runs": TestRuns,
+    "test_run_hardwares": TestRunHardwares,
     "test_run_payloads": TestRunPayloads,
     "incidents": Incidents,
 }

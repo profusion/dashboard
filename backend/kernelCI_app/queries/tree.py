@@ -16,11 +16,13 @@ from kernelCI_app.utils import get_query_time_interval
 
 
 def _use_commits_read_path() -> bool:
-    return settings.DB_SCHEMA_REFACTOR_READ_PATH in {"commits", "runs"}
+    read_path = settings.DB_TREE_READ_PATH or settings.DB_SCHEMA_REFACTOR_READ_PATH
+    return read_path in {"commits", "runs"}
 
 
 def _use_runs_read_path() -> bool:
-    return settings.DB_SCHEMA_REFACTOR_READ_PATH == "runs"
+    read_path = settings.DB_TREE_READ_PATH or settings.DB_SCHEMA_REFACTOR_READ_PATH
+    return read_path == "runs"
 
 
 def _get_tree_listing_count_clause(
@@ -261,13 +263,13 @@ def _get_runs_tree_listing_count_clause() -> str:
 def get_tree_listing_query(with_clause, join_clause, where_clause):
     count_clauses = _get_tree_listing_count_clause()
 
-    # 'MAX(checkouts.id) as id' is necessary in this case because
+    # 'MAX(checkouts.kci_id) as id' is necessary in this case because
     # if we just added the id in the query it would alter the GROUP BY clause,
     # potentially causing the tree listing page show the same tree multiple times
     main_query = f"""
             {with_clause}
             SELECT
-                MAX(checkouts.id) AS checkout_id,
+                MAX(checkouts.kci_id) AS checkout_id,
                 checkouts.tree_name,
                 checkouts.git_repository_branch,
                 checkouts.git_repository_url,
@@ -291,7 +293,7 @@ def get_tree_listing_query(with_clause, join_clause, where_clause):
                 checkouts.origin
             FROM
                 checkouts
-                LEFT JOIN builds ON builds.checkout_id = checkouts.id
+                LEFT JOIN builds ON builds.checkout_id = checkouts.kci_id
                 LEFT JOIN tests ON tests.build_id = builds.id
                 {join_clause}
             {where_clause}
@@ -425,6 +427,7 @@ def _get_tree_listing_data_from_runs(
                 selected_checkouts AS (
                     SELECT
                         checkouts.id,
+                        checkouts.kci_id,
                         checkouts.origin,
                         checkouts.origin_builds_finish_time,
                         checkouts.origin_tests_finish_time,
@@ -433,8 +436,14 @@ def _get_tree_listing_data_from_runs(
                         commits.git_repository_branch,
                         commits.git_repository_url,
                         commits.git_commit_hash,
-                        commits.git_commit_tags,
-                        commits.git_commit_name
+                        COALESCE(
+                            checkouts.git_commit_tags,
+                            commits.git_commit_tags
+                        ) AS git_commit_tags,
+                        COALESCE(
+                            checkouts.git_commit_name,
+                            commits.git_commit_name
+                        ) AS git_commit_name
                     FROM
                         checkouts
                         JOIN commits ON checkouts.commit_id = commits.id
@@ -448,7 +457,7 @@ def _get_tree_listing_data_from_runs(
                 )
                 ,{count_ctes}
             SELECT
-                MAX(selected_checkouts.id) AS checkout_id,
+                MAX(selected_checkouts.kci_id) AS checkout_id,
                 selected_checkouts.tree_name,
                 selected_checkouts.git_repository_branch,
                 selected_checkouts.git_repository_url,
@@ -576,8 +585,10 @@ def _get_tree_listing_fast_from_commits(
                 commits.git_repository_branch,
                 commits.git_repository_url,
                 commits.git_commit_hash,
-                commits.git_commit_name,
-                commits.git_commit_tags,
+                COALESCE(checkouts.git_commit_name, commits.git_commit_name)
+                    AS git_commit_name,
+                COALESCE(checkouts.git_commit_tags, commits.git_commit_tags)
+                    AS git_commit_tags,
                 checkouts.patchset_hash,
                 checkouts.start_time,
                 checkouts.origin_builds_finish_time,
@@ -625,7 +636,7 @@ def get_tree_listing_data_by_checkout_id(*, checkout_ids: list[str]) -> list[dic
     # TODO: check if those conditions of case, coalesce and group by are necessary
     query = f"""
             SELECT
-                MAX(checkouts.id) AS id,
+                MAX(checkouts.kci_id) AS id,
                 checkouts.tree_name,
                 checkouts.git_repository_branch,
                 checkouts.git_repository_url,
@@ -650,11 +661,11 @@ def get_tree_listing_data_by_checkout_id(*, checkout_ids: list[str]) -> list[dic
             FROM
                 checkouts
             LEFT JOIN
-                builds ON builds.checkout_id = checkouts.id
+                builds ON builds.checkout_id = checkouts.kci_id
             LEFT JOIN
                 tests ON tests.build_id = builds.id
             WHERE
-                checkouts.id IN ({", ".join(["%s"] * len(checkout_ids))})
+                checkouts.kci_id IN ({", ".join(["%s"] * len(checkout_ids))})
             GROUP BY
                 checkouts.origin,
                 checkouts.git_commit_hash,
@@ -677,7 +688,7 @@ def _get_tree_listing_data_by_checkout_id_from_runs(
 
     query = f"""
             SELECT
-                MAX(checkouts.id) AS id,
+                MAX(checkouts.kci_id) AS id,
                 commits.tree_name,
                 commits.git_repository_branch,
                 commits.git_repository_url,
@@ -685,17 +696,30 @@ def _get_tree_listing_data_by_checkout_id_from_runs(
                 checkouts.origin_builds_finish_time,
                 checkouts.origin_tests_finish_time,
                 CASE
-                    WHEN COUNT(DISTINCT commits.git_commit_tags) > 0 THEN
+                    WHEN COUNT(DISTINCT COALESCE(
+                        checkouts.git_commit_tags,
+                        commits.git_commit_tags
+                    )) > 0 THEN
                     COALESCE(
-                        ARRAY_AGG(DISTINCT commits.git_commit_tags) FILTER (
-                            WHERE commits.git_commit_tags IS NOT NULL
-                            AND commits.git_commit_tags::TEXT <> '{"{}"}'
+                        ARRAY_AGG(DISTINCT COALESCE(
+                            checkouts.git_commit_tags,
+                            commits.git_commit_tags
+                        )) FILTER (
+                            WHERE COALESCE(
+                                checkouts.git_commit_tags,
+                                commits.git_commit_tags
+                            ) IS NOT NULL
+                            AND COALESCE(
+                                checkouts.git_commit_tags,
+                                commits.git_commit_tags
+                            )::TEXT <> '{"{}"}'
                         ),
                         ARRAY[]::TEXT[]
                     )
                     ELSE ARRAY[]::TEXT[]
                 END AS git_commit_tags,
-                MAX(commits.git_commit_name) AS git_commit_name,
+                MAX(COALESCE(checkouts.git_commit_name, commits.git_commit_name))
+                    AS git_commit_name,
                 MAX(checkouts.start_time) AS start_time,
                 {count_clauses}
                 checkouts.origin
@@ -708,7 +732,7 @@ def _get_tree_listing_data_by_checkout_id_from_runs(
             LEFT JOIN
                 test_runs AS tests ON tests.build_run_id = builds.id
             WHERE
-                checkouts.id IN ({", ".join(["%s"] * len(checkout_ids))})
+                checkouts.kci_id IN ({", ".join(["%s"] * len(checkout_ids))})
             GROUP BY
                 checkouts.origin,
                 commits.git_commit_hash,
@@ -860,7 +884,7 @@ def get_tree_details_data(
                 FROM
                     (
                         SELECT
-                            checkouts.id AS checkout_id,
+                            checkouts.kci_id AS checkout_id,
                             checkouts.git_repository_url AS checkouts_git_repository_url,
                             checkouts.git_repository_branch AS checkouts_git_repository_branch,
                             checkouts.git_commit_tags,
@@ -1141,7 +1165,7 @@ def get_tree_data(
                 FROM
                     (
                         SELECT
-                            checkouts.id AS checkout_id,
+                            checkouts.kci_id AS checkout_id,
                             checkouts.git_repository_url AS checkouts_git_repository_url,
                             checkouts.git_repository_branch AS checkouts_git_repository_branch,
                             checkouts.git_commit_tags AS checkout_git_commit_tags,
@@ -1216,7 +1240,7 @@ def get_tree_details_builds(
         query = f"""
         WITH RELEVANT_CHECKOUTS AS (
             SELECT
-                c.id AS checkout_id,
+                c.kci_id AS checkout_id,
                 c.git_repository_url,
                 c.git_repository_branch,
                 c.git_commit_tags,
@@ -1495,7 +1519,7 @@ def get_tree_commit_history_hashes_aggregated(
             false AS is_boot,
             false AS is_test
         FROM checkouts c
-        INNER JOIN builds ON c.id = builds.checkout_id
+        INNER JOIN builds ON c.kci_id = builds.checkout_id
         LEFT JOIN incidents ic ON builds.id = ic.build_id
         WHERE
             c.git_commit_hash = ANY(%(commit_hashes)s)
@@ -1508,7 +1532,7 @@ def get_tree_commit_history_hashes_aggregated(
             {tree_name_full_clause}
             {build_duration_clause}
         GROUP BY
-            c.id,
+            c.kci_id,
             builds.status,
             builds.compiler,
             builds.architecture,
@@ -1539,7 +1563,7 @@ def get_tree_commit_history_hashes_aggregated(
             true AS is_test,
             (tests.path like 'boot.%%' or tests.path = 'boot') AS is_boot
         FROM checkouts c
-        INNER JOIN builds ON c.id = builds.checkout_id
+        INNER JOIN builds ON c.kci_id = builds.checkout_id
         INNER JOIN tests ON tests.build_id = builds.id {boot_filter}
         LEFT JOIN incidents ic ON tests.id = ic.test_id
         LEFT JOIN issues i ON ic.issue_id = i.id
@@ -1690,7 +1714,7 @@ def get_tree_commit_history(
     ),
     EARLIEST_COMMITS AS (
         SELECT
-            id,
+            kci_id AS id,
             git_commit_hash,
             git_commit_name,
             git_repository_branch,
@@ -1702,7 +1726,7 @@ def get_tree_commit_history(
             time_order
         FROM (
             SELECT
-                id,
+                kci_id AS id,
                 git_commit_hash,
                 git_commit_name,
                 git_repository_branch,
@@ -1744,7 +1768,7 @@ def get_tree_commit_history(
     ),
     SELECTED_CHECKOUTS AS (
         SELECT
-            c.id,
+            c.kci_id AS id,
             c.git_commit_hash,
             c.git_commit_name,
             c.git_commit_tags,

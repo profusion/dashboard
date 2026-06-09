@@ -271,3 +271,4 @@ Previous versions used `DB_DEFAULT_*` prefixed variables (e.g., `DB_DEFAULT_PASS
 - [Monitoring Setup](./docs/monitoring.md) — Prometheus metrics configuration
 - [Notifications](./docs/notifications.md) — Email and Discord notification setup
 - [Performance Tests](./docs/performanceTests.md) - k6 load test setup (`docker-compose.k6.yml`)
+- [Run Schema Refactor Production Runbook](./backend/docs/run-schema-refactor-production-runbook.md) - staged rollout for commit and build/test run schema changes

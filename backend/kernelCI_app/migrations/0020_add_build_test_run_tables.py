@@ -253,6 +253,57 @@ class Migration(migrations.Migration):
             },
         ),
         migrations.CreateModel(
+            name="Hardwares",
+            fields=[
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("name", models.TextField(unique=True)),
+            ],
+            options={
+                "db_table": "hardwares",
+            },
+        ),
+        migrations.CreateModel(
+            name="TestRunHardwares",
+            fields=[
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "hardware",
+                    models.ForeignKey(
+                        db_constraint=False,
+                        on_delete=django.db.models.deletion.DO_NOTHING,
+                        to="kernelCI_app.hardwares",
+                    ),
+                ),
+                (
+                    "test_run",
+                    models.ForeignKey(
+                        db_constraint=False,
+                        on_delete=django.db.models.deletion.DO_NOTHING,
+                        to="kernelCI_app.testruns",
+                    ),
+                ),
+            ],
+            options={
+                "db_table": "test_run_hardwares",
+            },
+        ),
+        migrations.CreateModel(
             name="TestRunPayloads",
             fields=[
                 (
@@ -331,6 +382,10 @@ class Migration(migrations.Migration):
         migrations.AddIndex(
             model_name="buildruns",
             index=models.Index(fields=["checkout"], name="build_runs_checkout"),
+        ),
+        migrations.AddIndex(
+            model_name="hardwares",
+            index=models.Index(fields=["name"], name="hardwares_name"),
         ),
         migrations.AddIndex(
             model_name="buildruns",
@@ -447,5 +502,26 @@ class Migration(migrations.Migration):
         migrations.AddIndex(
             model_name="testruns",
             index=models.Index(fields=["status"], name="test_runs_status"),
+        ),
+        migrations.AddIndex(
+            model_name="testrunhardwares",
+            index=models.Index(
+                fields=["hardware", "test_run"],
+                name="test_run_hw_hardware_test",
+            ),
+        ),
+        migrations.AddIndex(
+            model_name="testrunhardwares",
+            index=models.Index(
+                fields=["test_run", "hardware"],
+                name="test_run_hw_test_hardware",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="testrunhardwares",
+            constraint=models.UniqueConstraint(
+                fields=("test_run", "hardware"),
+                name="test_run_hardwares_unique",
+            ),
         ),
     ]

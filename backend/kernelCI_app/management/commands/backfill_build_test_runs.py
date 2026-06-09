@@ -118,6 +118,8 @@ class Command(BaseCommand):
             with transaction.atomic():
                 self._upsert_test_definitions(test_ids)
                 self._upsert_test_runs(test_ids)
+                self._upsert_hardwares(test_ids)
+                self._upsert_test_run_hardwares(test_ids)
                 self._upsert_test_run_payloads(test_ids)
 
             self.stdout.write(f"Processed {len(test_ids)} tests through id={last_id}")
@@ -226,14 +228,15 @@ class Command(BaseCommand):
             cursor.execute(
                 """
                 WITH selected_builds AS (
-                    SELECT *
+                    SELECT builds.*, checkouts.id AS checkout_id_int
                     FROM builds
-                    WHERE id = ANY(%s)
+                    JOIN checkouts ON checkouts.kci_id = builds.checkout_id
+                    WHERE builds.id = ANY(%s)
                 ),
                 latest_definitions AS (
-                    SELECT DISTINCT ON (checkout_id, series)
+                    SELECT DISTINCT ON (checkout_id_int, series)
                         _timestamp,
-                        checkout_id,
+                        checkout_id_int AS checkout_id,
                         origin,
                         architecture,
                         compiler,
@@ -300,7 +303,7 @@ class Command(BaseCommand):
                     builds._timestamp,
                     builds.id,
                     build_definitions.id,
-                    builds.checkout_id,
+                    checkouts.id,
                     checkouts.commit_id,
                     builds.origin,
                     builds.start_time,
@@ -308,9 +311,9 @@ class Command(BaseCommand):
                     builds.misc ->> 'lab',
                     builds.status
                 FROM builds
-                JOIN checkouts ON checkouts.id = builds.checkout_id
+                JOIN checkouts ON checkouts.kci_id = builds.checkout_id
                 JOIN build_definitions
-                    ON build_definitions.checkout_id = builds.checkout_id
+                    ON build_definitions.checkout_id = checkouts.id
                     AND build_definitions.series = builds.series
                 WHERE builds.id = ANY(%s)
                 ON CONFLICT (kci_id)
@@ -576,6 +579,44 @@ class Command(BaseCommand):
                         EXCLUDED.output_files
                     ),
                     misc = COALESCE(test_run_payloads.misc, EXCLUDED.misc)
+                """,
+                [test_ids],
+            )
+
+    def _upsert_hardwares(self, test_ids: list[str]) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO hardwares (name)
+                SELECT DISTINCT hardware
+                FROM tests
+                CROSS JOIN LATERAL unnest(tests.environment_compatible) AS hardware
+                WHERE tests.id = ANY(%s)
+                    AND hardware IS NOT NULL
+                ON CONFLICT (name) DO NOTHING
+                """,
+                [test_ids],
+            )
+
+    def _upsert_test_run_hardwares(self, test_ids: list[str]) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO test_run_hardwares (
+                    test_run_id,
+                    hardware_id
+                )
+                SELECT DISTINCT
+                    test_runs.id,
+                    hardwares.id
+                FROM tests
+                JOIN test_runs ON test_runs.kci_id = tests.id
+                CROSS JOIN LATERAL unnest(tests.environment_compatible) AS hardware_name
+                JOIN hardwares ON hardwares.name = hardware_name
+                WHERE tests.id = ANY(%s)
+                    AND hardware_name IS NOT NULL
+                ON CONFLICT ON CONSTRAINT test_run_hardwares_unique
+                DO NOTHING
                 """,
                 [test_ids],
             )

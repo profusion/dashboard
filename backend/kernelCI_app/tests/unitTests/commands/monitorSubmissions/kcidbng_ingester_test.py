@@ -649,9 +649,11 @@ class TestFlushBuffers:
             call(builds_buf, "builds"),
             call([], "build_runs"),
             call([], "build_run_payloads"),
+            call([], "hardwares"),
             call([], "test_definitions"),
             call(tests_buf, "tests"),
             call([], "test_runs"),
+            call([], "test_run_hardwares"),
             call([], "test_run_payloads"),
             call(incidents_buf, "incidents"),
         ]
@@ -666,8 +668,9 @@ class TestFlushBuffers:
         mock_out.assert_called_once_with(
             "Flushed batch in %.3fs (%.1f items/s): "
             "commits=%d issues=%d checkouts=%d build_definitions=%d builds=%d "
-            "build_runs=%d build_run_payloads=%d test_definitions=%d tests=%d "
-            "test_runs=%d test_run_payloads=%d incidents=%d"
+            "build_runs=%d build_run_payloads=%d hardwares=%d "
+            "test_definitions=%d tests=%d test_runs=%d test_run_hardwares=%d "
+            "test_run_payloads=%d incidents=%d"
             % (
                 1,
                 total_items,
@@ -679,7 +682,9 @@ class TestFlushBuffers:
                 0,
                 0,
                 0,
+                0,
                 n_tests,
+                0,
                 0,
                 0,
                 n_incidents,
@@ -772,8 +777,9 @@ class TestFlushBuffers:
                 call(
                     "Flushed batch in %.3fs (%.1f items/s): "
                     "commits=%d issues=%d checkouts=%d build_definitions=%d builds=%d "
-                    "build_runs=%d build_run_payloads=%d test_definitions=%d tests=%d "
-                    "test_runs=%d test_run_payloads=%d incidents=%d"
+                    "build_runs=%d build_run_payloads=%d hardwares=%d "
+                    "test_definitions=%d tests=%d test_runs=%d test_run_hardwares=%d "
+                    "test_run_payloads=%d incidents=%d"
                     % (
                         1,
                         total_items,
@@ -785,7 +791,9 @@ class TestFlushBuffers:
                         0,
                         0,
                         0,
+                        0,
                         n_tests,
+                        0,
                         0,
                         0,
                         n_incidents,

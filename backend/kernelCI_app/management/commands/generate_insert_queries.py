@@ -15,12 +15,14 @@ CONFLICT_TARGETS = {
         "git_repository_branch",
         "git_commit_hash",
     ),
+    "hardwares": ("name",),
     "test_definitions": (
         "build_definition_id",
         "path",
         "number_prefix",
         "number_unit",
     ),
+    "test_run_hardwares": ("test_run_id", "hardware_id"),
     "test_runs": ("kci_id",),
     "build_run_payloads": ("build_run_id",),
     "test_run_payloads": ("test_run_id",),
@@ -85,6 +87,11 @@ class Command(BaseCommand):
                 )
 
             conflict_target = ", ".join(CONFLICT_TARGETS.get(table_name, ("id",)))
+            conflict_action = (
+                f"DO UPDATE SET{','.join(conflict_clauses)}"
+                if conflict_clauses
+                else "DO NOTHING"
+            )
 
             query = f"""
                 INSERT INTO {table_name} ({",".join(updateable_db_fields_clauses)}
@@ -93,7 +100,7 @@ class Command(BaseCommand):
                     {", ".join(["%s"] * len(updateable_db_fields))}
                 )
                 ON CONFLICT ({conflict_target})
-                DO UPDATE SET{",".join(conflict_clauses)};
+                {conflict_action};
             """
 
             var_insert_queries[table_name] = {}
@@ -120,9 +127,11 @@ class Command(BaseCommand):
             builds=var_insert_queries["builds"],
             build_runs=var_insert_queries["build_runs"],
             build_run_payloads=var_insert_queries["build_run_payloads"],
+            hardwares=var_insert_queries["hardwares"],
             test_definitions=var_insert_queries["test_definitions"],
             tests=var_insert_queries["tests"],
             test_runs=var_insert_queries["test_runs"],
+            test_run_hardwares=var_insert_queries["test_run_hardwares"],
             test_run_payloads=var_insert_queries["test_run_payloads"],
             incidents=var_insert_queries["incidents"],
         )
