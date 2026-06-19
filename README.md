@@ -1,155 +1,65 @@
 # KernelCI Dashboard
 
-Our Web Dashboard to evaluate test results from the common results database([KCIDB](https://docs.kernelci.org/kcidb/)).
+Official Dashboard for [KCIDB](https://docs.kernelci.org/components/kcidb/).
 Available at [dashboard.kernelci.org](https://dashboard.kernelci.org).
 
-The new KernelCI Web Dashboard is a web application created to provide access
-to static checks, build logs, boot logs and test results related for the Linux kernel
-CI/test ecosystem. All that data will be provided by [KCIDB](https://docs.kernelci.org/kcidb/)
-system from the [KernelCI Foundation](https://kernelci.org/).
+The KernelCI Dashboard is a web application created to visualize results from
+static checks, builds, boots and tests related to the Linux kernel CI/test ecosystem.
+All that data is provided by the [KCIDB](https://docs.kernelci.org/components/kcidb/) project
+by the [KernelCI Foundation](https://kernelci.org/).
 
-## Repository
-What we have as a repository is a monorepo containing the *dashboard* (the web application) and a *backend*.
+## Repository structure
 
-### Dashboard
- A web app built with [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/), to see more information check the dashboard [README](dashboard/README.md).
-
-### Backend
-A Python http server built with [Django](https://www.djangoproject.com/) + [DRF](https://www.django-rest-framework.org/), to see more information check the backend [README](backend/README.md).
-
+- `dashboard/` - Frontend web application built with [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/).
+  Check its [README](dashboard/README.md) for more info.
+- `backend` - API built with [Django](https://www.djangoproject.com/) + [DRF](https://www.django-rest-framework.org/).
+  Check its [README](backend/README.md) for more info.
+- `docs/` - General documentation and glossary for the project. Implementation specific documentation can be found in the respective sub-directories.
+- `k6` - TODO
+- `monitoring` - TODO
+- `proxy/` - TODO
 
 ## Quick run
 
 If you want to just run the project, you can try out pre-built images with the [docker-compose-next.yml](./docker-compose-next.yml) file. This pulls images from GHCR and runs them locally without needing to rebuild them. You may still need to set up environment variables, so read the docs.
 
-## Build
+## Development setup
 
-### Frontend
+### Local
 
-Create a .env file in /dashboard, check and set the variables and their values
-```sh
- cp ./dashboard/.env.example ./dashboard/.env
-```
+1. Follow setup instructions for the [Dashboard](dashboard/README.md#setup) and [Backend](backend/README.md#setup) to get the services running.
 
-With docker, you can start just the frontend with `docker compose up --build proxy`. It is also possible to run the dashboard outside of it for development purposes.
+### Docker Compose
 
-We use `pnpm` to help with the package management. Install the dependencies with
-```sh
-pnpm install
-```
+Alternatively, you can use Docker Compose to run the services in containers.
+This is the method used in production and is recommended for development as well, as it more closely matches the production environment.
 
-Then start the dev server with
-```sh
-pnpm dev
-```
+#### Pre-requisites
 
-If you want to test the production state of the dashboard, use
-```sh
-pnpm build
-pnpm preview
-```
+- [Docker](https://docs.docker.com/get-docker/)
+- [Docker Compose](https://docs.docker.com/compose/install/)
 
-### Backend
+#### Setup
 
-Create a .env file in the base directory,
-```sh
- cp .env.backend.example .env.backend
-```
+1. Copy `.env.example` to `.env` and set the environment variables as needed.
+   The `.env` file is used by docker compose to set environment variables for the services.
+2. Set `COMPOSE_FILE` to `compose.yaml:compose.override.dev.yaml` in the `.env` file.
+   The `dev` override sets up live code reloading for backend and frontend services.
+3. (Optional) Run `docker compose build` to build images from local Dockerfiles.
+   Some code changes require rebuilding the images to be applied.
+4. Run `docker compose up --wait` to start the services.
+5. Access the dashboard at `http://localhost:8080` and the API at `http://localhost:8080/api`.
+6. Check `.env` and the compose files for other options.
 
-Create a secret key for Django:
-```sh
-export DJANGO_SECRET_KEY=$(openssl rand -base64 22)
-```
-We are not using sessions or anything like that right now, so changing the secret key won't be a big deal.
-
-Since the production *database* is not open for the public, we use ssh tunneling with a whitelist to access it. This means that the docker setup currently can't access it, but we have a local database that is connected automatically if you don't change the env vars.
-
-If you do use docker, you should create a secret file with the database password:
-```sh
-mkdir -p backend/runtime/secrets
-echo <password> > backend/runtime/secrets/postgres_password_secret
-```
-
-If you are going to use a database user other than `kernelci`, set it to `DB_USER`:
-```sh
-export DB_USER=<user>
-```
-
-If you are setting up instance different than production KernelCI dashboard, you need to define CORS_ALLOWED_ORIGINS. On .env.backend:
-```
-CORS_ALLOWED_ORIGINS=["https://d.kernelci.org","https://dashboard.kernelci.org"]
-```
-
-It is also possible to run the backend outside of docker for development purposes. Simply run the ssh tunnel with the instructions sent to you by the database manager, then export the variables seen in [.env.backend.example](/.env.backend.example).
-
-> For other optional envs, check the [backend README](backend/README.md).
-
-### Common
-
-Startup the services:
- ```sh
- docker compose up --build -d
- ```
- Docker exposes port 80 (that you don't need to enter in the URL) instead of 5173 and 8000 that is used when running the dashboard project outside of docker.
- So you can hit the frontend with `http://localhost`  and the backend with `http://localhost/api` when running locally.
-
-Make sure that docker has the right permissions and has access to the environment variables. One way to do that is to set up a docker permission group.
-
-If you are running the commands for exporting the environment variables and running docker separately, you can run docker with admin privileges and allowing environment variables with:
-```sh
-sudo -E docker compose up --build -d
-```
-Or you can also run the env exports and docker compose within the root user by running `sudo su`.
-
-> Tip: you can create a quick script to set all the necessary envs and start the services. This will also allow docker to see the environment variables correctly. Example:
-
-```sh
-export DB_USER=email@email.com
-export DJANGO_SECRET_KEY=$(openssl rand -base64 22)
-export DB_NAME=kcidb
-export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
-
-docker compose up --build
-```
-
-> [Note] If you are going to run using only the local database, the DB_NAME should be `dashboard` and the `DB_USER` and `DB_PASSWORD` should be `admin` (for now). This simply follows what is going to be setup by the `dashboard_db` service on docker compose.
-
-
-## Deploying to production
-
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions covering development, staging, and production scenarios.
-
-To deploy to prod you need to push a tag in the `release/YYYYMMDD.N` format
-like: `release/20240910.0`
-
-### Publishing container images to GHCR
-
-The workflow `.github/workflows/deploy-containers.yaml` publishes Docker images for the three services used by the dashboard stack:
-
-- `dashboard-backend` (from `./backend`)
-- `dashboard-frontend` (from `./dashboard/Dockerfile`)
-- `dashboard-proxy` (from `./proxy`)
-
-This workflow is triggered on pushes to main (on the original repository) and also manually (`workflow_dispatch`) and pushes images to GHCR under `ghcr.io/<owner>/<repo>` with two tags for each image:
-
-- `latest`
-- `${{ github.sha }}`
-
-At the end of the run, the workflow writes an image digest summary in the GitHub Actions job summary.
-
-## Test results email reports
-
-See details about our new [notifications](docs/notifications.md) system.
-
-## Manual environment checks
+### Manual configuration checks
 
 If you want to verify container/deployment environment settings before running services, use:
 
- - `docker compose run --rm backend poetry run python3 manage.py verify_env` for DB/Redis/Email + storage + env/secrets checks
+- `docker compose run --rm backend python3 manage.py verify_env` for DB/Redis/Email + storage + env/secrets checks
 - [docs/verify_env.md](docs/verify_env.md) for detailed examples, including test email sending to a specific destination
   - Destination is required with `--send-test-email` and `--to-email`.
 
-## Contributing 
+## Contributing
 
 Check out our [CONTRIBUTING.md](/CONTRIBUTING.md), and there is an [onboarding guide](docs/Onboarding.md) to help get acquainted with the project. Contributions are welcome!
 

@@ -1,5 +1,7 @@
 # Backend [![cov](https://kernelci.github.io/dashboard/badges/coverage.svg)](https://github.com/kernelci/dashboard/actions)
 
+## Setup
+
 ## Prerequisites
 
 Before you begin, ensure you have the following installed on your system:

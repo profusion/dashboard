@@ -1,0 +1,110 @@
+secrets:
+  db_password:
+    file: .secrets/db_password
+
+volumes:
+  backend-data:
+  frontend-data:
+  database-data:
+  redis-data:
+
+networks:
+  proxy:
+  database:
+    internal: true
+
+services:
+  #########################
+  ### Self build images ###
+  #########################
+  backend:
+    image: ghcr.io/kernelci/dashboard/dashboard-backend
+    volumes:
+      - backend-data:${BACKEND_VOLUME_DIR:-/volume_data}
+    env_file: .env
+    entrypoint: "./utils/docker/backend_entrypoint.sh"
+    command:
+      - gunicorn
+      - kernelCI.wsgi:application
+      - --workers=5
+      - --forwarded-allow-ips=*
+      - --bind=0.0.0.0:8000
+      - --timeout=250
+    networks:
+      - database
+      - proxy
+    depends_on:
+      - redis
+      - database
+
+  ingester:
+    image: ghcr.io/kernelci/dashboard/dashboard-backend
+    command:
+      - python3
+      - manage.py
+      - monitor_submissions
+      - --spool-dir
+      - /app/spool
+    env_file: .env
+    volumes:
+      - backend-data:${BACKEND_VOLUME_DIR:-/volume_data} # Directory of the tree names file and other data
+      - ${INGESTER_SPOOL_DIR:-../spool}:/app/spool
+    networks:
+      - database
+    depends_on:
+      - redis
+      - database
+    profiles: [ "with_commands" ]
+
+  pending_aggregations_processor:
+    image: ghcr.io/kernelci/dashboard/dashboard-backend
+    env_file: .env
+    networks:
+      - database
+    command:
+      - python3
+      - manage.py
+      - process_pending_aggregations
+      - --loop
+      - --interval
+      - "5"
+    depends_on:
+      - redis
+      - database
+    profiles: [ "with_commands" ]
+
+  frontend:
+    image: ghcr.io/kernelci/dashboard/dashboard-frontend
+    network_mode: none
+    volumes:
+      - frontend-data:/data/static
+
+  proxy:
+    image: ghcr.io/kernelci/dashboard/dashboard-proxy
+    networks:
+      - proxy
+    volumes:
+      - frontend-data:/data/static
+    env_file: .env
+
+  ########################
+  ### Pre-built images ###
+  ########################
+  database:
+    image: postgres:17
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${DB_USER:-admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      POSTGRES_DB: ${DB_NAME:-dashboard}
+    volumes:
+      - database-data:/var/lib/postgresql/data
+    networks:
+      - database
+
+  redis:
+    image: redis:8
+    volumes:
+      - redis-data:/data
+    networks:
+      - database

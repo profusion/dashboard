@@ -1,0 +1,66 @@
+# Development environment override for compose.yaml.
+# Enables live code reloading for frontend, backend, ingester and aggregations.
+# Web app is served on ports 8080 (HTTP) and 8443 (HTTPS) by default,
+# configurable via EXTERNAL_HTTP_PORT and EXTERNAL_HTTPS_PORT environment variables.
+
+name: kernelci-dashboard-dev
+
+services:
+  backend:
+    build: ./backend
+    command:
+      - python
+      - manage.py
+      - runserver
+      - 0.0.0.0:8000
+    environment:
+      - PYTHONOPTIMIZE=0
+    develop:
+      watch:
+        - action: sync
+          path: ./backend
+          target: /backend
+          initial_sync: true
+
+  ingester:
+    build: ./backend
+    environment:
+      - PYTHONOPTIMIZE=0
+    develop:
+      watch:
+        - action: sync
+          path: ./backend
+          target: /backend
+          initial_sync: true
+
+  pending_aggregations_processor:
+    build: ./backend
+    environment:
+      - PYTHONOPTIMIZE=0
+    develop:
+      watch:
+        - action: sync
+          path: ./backend
+          target: /backend
+          initial_sync: true
+
+  frontend:
+    build: ./dashboard
+    develop:
+      watch:
+        - action: rebuild
+          path: ./dashboard
+          target: /dashboard
+          initial_sync: true
+
+  proxy:
+    build: ./proxy
+    ports:
+      - ${EXTERNAL_HTTP_PORT:-8080}:80
+      - ${EXTERNAL_HTTPS_PORT:-8443}:443
+    develop:
+      watch:
+        - action: sync
+          path: ./dashboard
+          target: /dashboard
+          initial_sync: true

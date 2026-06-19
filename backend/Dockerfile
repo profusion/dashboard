@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Create server docker image (all non-code dependencies)
-FROM alpine:3.20 as backend-base
+FROM alpine:3.20 AS backend-base
 
 WORKDIR /
 
@@ -23,7 +23,7 @@ RUN apk update \
     && $POETRY_HOME/bin/pip install poetry==1.8.3 \
     && ln -s $POETRY_HOME/bin/poetry /bin/poetry
 
-FROM backend-base as kernelci-django-backend
+FROM backend-base AS kernelci-django-backend
 WORKDIR /backend
 COPY . /backend
 
@@ -42,3 +42,5 @@ RUN PY_MAJMIN=`poetry run python -c "import sys; print('%s.%s'%sys.version_info[
     D="$PY_D $DJANGO_APP"; \
     echo "compile python $PY_MAJMIN byte code at $D"; \
     poetry run python -m compileall -q $D || exit 1;
+
+ENTRYPOINT ["poetry", "run"]

@@ -1,5 +1,7 @@
 # Running in development
 
+## Setup
+
 - Install the packager manager [pnpm](https://pnpm.io/installation)
 
 - Install all dependencies with:
@@ -59,6 +61,8 @@ pnpm run e2e-ui
 ## E2E Test Selectors
 
 To avoid complex css selectors, you can add a data-test-id attribute to elements that you want to target in your e2e tests. That way you don't need to fight with complex selectors.
+
+
 
 # Routing and State Management
 
