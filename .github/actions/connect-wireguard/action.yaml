@@ -1,0 +1,52 @@
+name: Connect to WireGuard VPN
+description: Connect to WireGuard VPN for interaction with private servers
+author: Luiz Georg <luiz.georg@profusion.mobi>
+
+inputs:
+  client key:
+    description: Private wireguard key for the Runner
+    required: true
+  client vpn ip:
+    description: VPN internal IP address for the Runner
+    required: true
+  client listen port:
+    description: Port for the Runner to listen on
+    required: false
+    default: 51820
+
+  host public key:
+    description: Public wireguard key of the remote server
+    required: true
+  host endpoint:
+    description: Internet-reachable IP or hostname of the WireGuard connection endpoint
+    required: true
+  host public port:
+    description: Port of the WireGuard connection endpoint
+    required: false
+    default: 51820
+  vpn subnet:
+    description: Network range accessible through the VPN
+    required: true
+
+runs:
+  using: composite
+  steps:
+  - name: Verify inputs
+    shell: bash
+    run: |
+      [[ -z "$INPUT_CLIENT_KEY" ]] && echo "Error: client key is required"
+      [[ -z "$INPUT_CLIENT_VPN_IP" ]] && echo "Error: client vpn ip is required"
+      [[ -z "$INPUT_HOST_PUBLIC_KEY" ]] && echo "Error: host public key is required"
+      [[ -z "$INPUT_HOST_ENDPOINT" ]] && echo "Error: host endpoint is required"
+      [[ -z "$INPUT_VPN_SUBNET" ]] && echo "Error: vpn subnet is required"
+      exit 0
+
+  - name: Install WireGuard tools
+    shell: bash
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y wireguard-tools iproute2
+
+  - name: Connect to VPN
+    shell: bash
+    run: ${{ github.action_path }}/connect.sh
