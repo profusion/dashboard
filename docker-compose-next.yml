@@ -40,7 +40,7 @@ services:
             - private
 
     backend:
-        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/dashboard-backend:${IMAGE_TAG:-latest}
+        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/backend:${IMAGE_TAG:-latest}
         entrypoint: "./utils/docker/backend_entrypoint.sh"
         command:
             - poetry
@@ -63,14 +63,14 @@ services:
         depends_on:
             - redis
 
-    dashboard:
-        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/dashboard-frontend:${IMAGE_TAG:-latest}
+    frontend:
+        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/frontend:${IMAGE_TAG:-latest}
         volumes:
             - static-data:/data/static
         restart: no
 
     proxy:
-        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/dashboard-proxy:${IMAGE_TAG:-latest}
+        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/proxy:${IMAGE_TAG:-latest}
         restart: always
         depends_on:
             backend:
@@ -91,7 +91,7 @@ services:
             PROXY_TARGET: ${PROXY_TARGET:-http://backend:8000}
 
     ingester:
-        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/dashboard-backend:${IMAGE_TAG:-latest}
+        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/backend:${IMAGE_TAG:-latest}
         command:
             - poetry
             - run
@@ -115,7 +115,7 @@ services:
         profiles: ["with_commands"]
 
     pending_aggregations_processor:
-        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/dashboard-backend:${IMAGE_TAG:-latest}
+        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/backend:${IMAGE_TAG:-latest}
         command:
             - poetry
             - run
