@@ -67,13 +67,16 @@ services:
         image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/dashboard-frontend:${IMAGE_TAG:-latest}
         volumes:
             - static-data:/data/static
+        restart: no
 
     proxy:
         image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_OWNER:-kernelci}/${IMAGE_REPOSITORY:-dashboard}/dashboard-proxy:${IMAGE_TAG:-latest}
         restart: always
         depends_on:
-            - backend
-            - dashboard
+            backend:
+                condition: service_started
+            dashboard:
+                condition: service_completed_successfully
         networks:
             - public
         volumes:

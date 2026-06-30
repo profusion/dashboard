@@ -1,0 +1,72 @@
+name: Deploy Dashboard with pre-built images
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Commit reference (branch, tag or sha) to deploy'
+        required: true
+        type: string
+      working_dir:
+        description: 'Working directory on the deployed server'
+        required: true
+        type: string
+    secrets:
+      ssh:
+        description: 'SSH connection inputs in JSON format'
+        required: true
+      wireguard:
+        description: 'WireGuard VPN connection inputs in JSON format'
+        required: false
+
+jobs:
+  deploy-pre-built:
+    runs-on: ubuntu-latest
+    env:
+      SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+      SSH_ID: "${{ fromJson(secrets.ssh).username }}@${{ fromJson(secrets.ssh).host }}"
+      WORKING_DIR: ${{ inputs.working_dir }}
+    steps:
+      - name: Checkout compose file
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 #v7.0.0
+
+      - name: Connect to Private VPN
+        uses: ./.github/actions/connect-wireguard
+        with:
+          client key: ${{ fromJson(secrets.wireguard).CLIENT_KEY }}
+          client vpn ip: ${{ fromJson(secrets.wireguard).CLIENT_VPN_IP }}
+          host public key: ${{ fromJson(secrets.wireguard).HOST_PUBLIC_KEY }}
+          host endpoint: ${{ fromJson(secrets.wireguard).HOST_ENDPOINT }}
+          vpn subnet: ${{ fromJson(secrets.wireguard).VPN_SUBNET }}
+
+      - name: Configure SSH auth
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh/ && chmod 700 ~/.ssh/
+          touch ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts
+          echo "$SSH_HOSTKEY" > ~/.ssh/known_hosts
+          echo "StrictHostKeyChecking=yes" >> ~/.ssh/config
+          eval $(ssh-agent -a "$SSH_AUTH_SOCK")
+          ssh-add -q - <<< "$SSH_KEY"
+        env:
+          SSH_HOSTKEY: ${{ fromJson(secrets.ssh).host_key }}
+          SSH_KEY: ${{ fromJson(secrets.ssh).private_key }}
+
+      - name: Copy deployment files to server
+        id: copy-files
+        shell: bash
+        run: |
+          scp ./docker-compose-next.yml "${SSH_ID}:${WORKING_DIR}/compose.yaml"
+          test "$(md5sum docker-compose-next.yml | cut -d' ' -f1)" = "$(ssh "${SSH_ID}" md5sum ${WORKING_DIR}/compose.yaml | cut -d' ' -f1)"
+
+      - name: Run compose on server
+        shell: bash
+        run: |
+          ssh "${SSH_ID}" bash --norc --noprofile -euo pipefail << EOF
+            cd ${WORKING_DIR}
+            docker compose up --pull=always --no-build --timeout=60 --wait --wait-timeout=60 --remove-orphans
+          EOF
+

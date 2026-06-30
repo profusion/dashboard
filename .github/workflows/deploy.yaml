@@ -1,0 +1,74 @@
+name: Deploy Dashboard to server using SSH
+on:
+  push:
+    branches:
+    - production
+    - staging
+  workflow_dispatch:
+    inputs:
+      working_dir:
+        description: 'Working directory on the deployed server'
+        required: true
+
+jobs:
+  check-migrations:
+    runs-on: ubuntu-latest
+    outputs:
+      has_new_migrations: ${{ steps.check.outputs.has_new_migrations }}
+      migration_list: ${{ steps.check.outputs.migration_list }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 #v7.0.0
+      with:
+        fetch-depth: 0
+
+    - name: Check for new Django migrations
+      id: check
+      run: |
+        # Compare against the previous tag; fall back to HEAD~1 if no tags exist
+        PREV_TAG=$(git describe --abbrev=0 --tags HEAD^ 2>/dev/null || echo "")
+        if [ -z "$PREV_TAG" ]; then
+          echo "No previous tag found, comparing against HEAD~1"
+          COMPARE_REF="HEAD~1"
+        else
+          echo "Comparing migrations against tag: $PREV_TAG"
+          COMPARE_REF="$PREV_TAG"
+        fi
+
+        NEW_MIGRATIONS=$(git diff --name-only "$COMPARE_REF" HEAD -- '**/migrations/*.py' \
+          | grep -v '__init__.py' || true)
+
+        if [ -n "$NEW_MIGRATIONS" ]; then
+          echo "has_new_migrations=true" >> $GITHUB_OUTPUT
+          # Encode newlines for the output so it can be passed between jobs
+          ENCODED=$(echo "$NEW_MIGRATIONS" | tr '\n' '|')
+          echo "migration_list=$ENCODED" >> $GITHUB_OUTPUT
+          echo "New migration files detected:"
+          echo "$NEW_MIGRATIONS"
+        else
+          echo "has_new_migrations=false" >> $GITHUB_OUTPUT
+          echo "migration_list=" >> $GITHUB_OUTPUT
+          echo "No new migration files found"
+        fi
+
+  deploy:
+    uses: ./.github/workflows/deploy-pre-built.yaml
+    with:
+      ref: ${{ github.sha }}
+      working_dir: ${{ inputs.working_dir || format('{0}-pre-built', github.ref_name) }}
+    secrets:
+      ssh: |
+        {
+        "username": "${{ secrets.SERVER_USER }}",
+        "host": "${{ secrets.SERVER_HOST }}",
+        "host_key": "${{ secrets.SERVER_HOSTKEY }}",
+        "private_key": "${{ secrets.SERVER_KEY }}"
+        }
+      wireguard: |
+        {
+        "CLIENT_KEY": "${{ secrets.WG_CLIENT_KEY }}",
+        "CLIENT_VPN_IP": "${{ secrets.WG_CLIENT_VPN_IP }}",
+        "HOST_PUBLIC_KEY": "${{ secrets.WG_HOST_PUBLIC_KEY }}",
+        "HOST_ENDPOINT": "${{ secrets.WG_HOST_ENDPOINT }}",
+        "VPN_SUBNET": "${{ secrets.WG_VPN_SUBNET }}"
+        }
