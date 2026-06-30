@@ -3,8 +3,10 @@ name: Publish GHCR Images
 on:
   push:
     branches:
-      - main
-  workflow_dispatch:
+      - production
+      - staging
+    tags:
+      - 'release/*'
 
 concurrency:
   group: publish-ghcr-${{ github.ref }}
@@ -14,121 +16,56 @@ permissions:
   contents: read
   packages: write
 
-env:
-  REGISTRY: ghcr.io
-
 jobs:
-  build-and-push-backend:
-    if: github.repository == 'kernelci/dashboard' || github.event_name == 'workflow_dispatch'
+  build-and-push:
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [backend, frontend, proxy]
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+    - name: Get commit timestamp
+      id: commit-date
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        COMMIT_DATE=$(gh api repos/${{ github.repository }}/commits/${{ github.sha }} --jq '.commit.committer.date')
+        echo "epoch=$(date -d "$COMMIT_DATE" +%s)" >> $GITHUB_OUTPUT
 
-      - name: Compute image prefix
-        id: meta
-        run: echo "prefix=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+    - name: Docker meta
+      id: meta
+      uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+      with:
+        images: |
+          ghcr.io/${{ github.repository }}/${{ matrix.service }}
+        tags: |
+          type=match,pattern=release/(.*),group=1
+          type=ref,event=branch
+          type=ref,event=tag
+          type=sha
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Log in to GHCR
+      uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      - name: Build and push backend image
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.prefix }}/dashboard-backend:latest
-            ${{ steps.meta.outputs.prefix }}/dashboard-backend:${{ github.sha }}
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
 
-  build-and-push-dashboard:
-    if: github.repository == 'kernelci/dashboard' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Compute image prefix
-        id: meta
-        run: echo "prefix=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push dashboard image
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./dashboard/Dockerfile
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.prefix }}/dashboard-frontend:latest
-            ${{ steps.meta.outputs.prefix }}/dashboard-frontend:${{ github.sha }}
-
-  build-and-push-proxy:
-    if: github.repository == 'kernelci/dashboard' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Compute image prefix
-        id: meta
-        run: echo "prefix=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push proxy image
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: ./proxy
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.prefix }}/dashboard-proxy:latest
-            ${{ steps.meta.outputs.prefix }}/dashboard-proxy:${{ github.sha }}
-
-  verify:
-    if: always()
-    needs:
-      - build-and-push-backend
-      - build-and-push-dashboard
-      - build-and-push-proxy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Image publish summary
-        run: |
-          echo "### Published GHCR Images" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Image | Digest |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ----- | ------ |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| dashboard-backend | \`${{ needs.build-and-push-backend.outputs.digest }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| dashboard-frontend | \`${{ needs.build-and-push-dashboard.outputs.digest }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| dashboard-proxy | \`${{ needs.build-and-push-proxy.outputs.digest }}\` |" >> "$GITHUB_STEP_SUMMARY"
+    - name: Build and push images
+      id: build
+      uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      with:
+        context: "{{defaultContext}}:${{ case(matrix.service == 'frontend', 'dashboard',  matrix.service) }}"
+        push: true
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
