@@ -77,10 +77,13 @@ jobs:
 
       - name: Run images on remote
         shell: bash
+        env:
+          COMPOSE_PROGRESS: plain
+          COMPOSE_REMOVE_ORPHANS: 'true'
         run: |
           docker context create remote-server --docker "host=ssh://${SSH_ID}"
           IMAGES=$(docker compose config --format json | jq -r '
             .name as $proj | .services | to_entries[] | select(.value.build != null)
             | .value.image // "\($proj)-\(.key):latest"')
           docker save $IMAGES | docker --context=remote-server load
-          docker --context=remote-server compose up --remove-orphans --detach
+          docker --context=remote-server compose up --detach
