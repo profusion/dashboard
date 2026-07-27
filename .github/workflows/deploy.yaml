@@ -1,13 +1,13 @@
 name: Deploy Dashboard to server using SSH
 on:
   push:
-    branches:
-    - production
-    - staging
   workflow_dispatch:
     inputs:
+      ref:
+        description: Commit reference (branch, tag or sha) to deploy
+        required: true
       working_dir:
-        description: 'Working directory on the deployed server'
+        description: Working directory on the deployed server
         required: true
 
 permissions:
@@ -59,8 +59,7 @@ jobs:
   deploy:
     uses: ./.github/workflows/deploy-from-source.yaml
     with:
-      ref: ${{ github.sha }}
-      working_dir: ${{ inputs.working_dir || format('{0}-from-source', github.ref_name) }}
+      ref: ${{ inputs.ref || github.ref_name }}
     secrets:
       ssh_user: ${{ secrets.SSH_USER }}
       ssh_host_address: ${{ secrets.SSH_HOST_ADDRESS }}

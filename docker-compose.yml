@@ -10,20 +10,17 @@ networks:
 
 services:
     backend:
-        container_name: dashboard_backend_service_staging
+        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPOSITORY:-local}/backend:${IMAGE_TAG:-latest}
         build:
             context: ./backend
         volumes:
-            - backend-data:${BACKEND_VOLUME_DIR:-/volume_data}
+            - backend-data:/volume_data
         env_file:
             - .env
         networks:
             - private
             - public
-        ports:
-            - 8000:8000
         restart: always
-        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPOSITORY:-local}/dashboard-backend:${IMAGE_TAG:-latest}
         command:
             - poetry
             - run
@@ -36,23 +33,17 @@ services:
         entrypoint: "./utils/docker/backend_entrypoint.sh"
         depends_on:
             - redis
-            - dashboard_db
+            - database
 
     ingester:
-        container_name: dashboard_ingester_service_staging
-        build:
-            context: ./backend
+        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPOSITORY:-local}/backend:${IMAGE_TAG:-latest}
         volumes:
-            - backend-data:${BACKEND_VOLUME_DIR:-/volume_data} # Directory of the tree names file and other data
-            - ${INGESTER_SPOOL_DIR}:/app/spool                 # Directory for ingester to monitor
+            - backend-data:/volume_data # Directory of the tree names file and other data
+            - ${INGESTER_SPOOL_DIR:-./spool}:/app/spool                 # Directory for ingester to monitor
         env_file:
             - .env
         networks:
             - private
-            - public
-        environment:
-            # Pass down the variable from .env to inside the container
-            - INGESTER_METRICS_PORT=${INGESTER_METRICS_PORT:-8002}
         command:
             - poetry
             - run
@@ -63,22 +54,15 @@ services:
             - /app/spool
         restart: always
         depends_on:
-            - dashboard_db
-        ports:
-            - 8002:8002
+            - database
         profiles: ["with_commands"]
 
     pending_aggregations_processor:
-        container_name: pending_aggregations_processor_service_staging
-        build:
-            context: ./backend
+        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPOSITORY:-local}/backend:${IMAGE_TAG:-latest}
         env_file:
             - .env
         networks:
             - private
-            - public
-        environment:
-            - PENDING_AGGREGATIONS_METRICS_PORT=${PENDING_AGGREGATIONS_METRICS_PORT:-8003}
         command:
             - poetry
             - run
@@ -90,12 +74,10 @@ services:
             - "5"
         restart: always
         depends_on:
-            - dashboard_db
-        ports:
-            - 8003:8001
+            - database
         profiles: ["with_commands"]
 
-    dashboard_db:
+    database:
         image: postgres:17
         env_file:
             - .env
@@ -110,10 +92,10 @@ services:
         networks:
             - private
 
-    dashboard:
+    frontend:
+        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPOSITORY:-local}/frontend:${IMAGE_TAG:-latest}
         build:
             context: ./dashboard
-        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPOSITORY:-local}/dashboard-frontend:${IMAGE_TAG:-latest}
         volumes:
             - static-data:/data/static
 
@@ -132,20 +114,21 @@ services:
             - ./anubis/botPolicy.yaml:/data/cfg/botPolicy.yaml:ro
         healthcheck:
             test: ["CMD", "anubis", "--healthcheck"]
-            interval: 5s
-            timeout: 30s
-            retries: 5
-            start_period: 500ms
+            interval: 30s
+            timeout: 3s
+            retries: 3
+            start_period: 30s
+            start_interval: 500ms
 
     proxy:
+        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPOSITORY:-local}/proxy:${IMAGE_TAG:-latest}
         build: ./proxy
-        image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPOSITORY:-local}/dashboard-proxy:${IMAGE_TAG:-latest}
         restart: always
         depends_on:
             backend:
                 condition: service_started
-            dashboard:
-                condition: service_started
+            frontend:
+                condition: service_completed_successfully
             anubis:
                 condition: service_healthy
         networks:
@@ -154,7 +137,5 @@ services:
             - static-data:/data/static
             - /etc/letsencrypt/live/staging.dashboard.kernelci.org/fullchain.pem:/etc/nginx/ssl/fullchain.pem
             - /etc/letsencrypt/live/staging.dashboard.kernelci.org/privkey.pem:/etc/nginx/ssl/privkey.pem
-        ports:
-            - ${STAGING_EXTERNAL_HTTP_PORT:-9000}:80
         env_file:
             - .env
