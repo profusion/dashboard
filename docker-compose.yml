@@ -112,8 +112,7 @@ services:
 
     dashboard:
         build:
-            context: .
-            dockerfile: ./dashboard/Dockerfile
+            context: ./dashboard
         image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPOSITORY:-local}/dashboard-frontend:${IMAGE_TAG:-latest}
         volumes:
             - static-data:/data/static

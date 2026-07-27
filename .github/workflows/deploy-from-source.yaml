@@ -1,0 +1,86 @@
+name: Deploy Dashboard from fresh-built images
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Commit reference (branch, tag or sha) to deploy'
+        required: true
+        type: string
+      working_dir:
+        description: 'Working directory on the deployed server'
+        required: true
+        type: string
+    secrets:
+      ssh_user:
+      ssh_host_address:
+      ssh_host_pubkey:
+      ssh_private_key:
+
+      wg_client_key:
+      wg_client_vpn_ip:
+      wg_host_pubkey:
+      wg_host_endpoint:
+      wg_vpn_subnet:
+
+jobs:
+  deploy-from-source:
+    runs-on: ubuntu-latest
+    env:
+      SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+      SSH_ID: "${{ secrets.ssh_user }}@${{ secrets.ssh_host_address }}"
+      WORKING_DIR: ${{ inputs.working_dir }}
+    steps:
+      - name: Checkout repository # Needed for actions/workflow reuse
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 #v7.0.0
+
+      - name: Setup Docker
+        uses: docker/setup-docker-action@6d7cfa65f60a9dda7b46e5513fa982536f3c9877 # v5.3.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Connect to Private VPN
+        uses: ./.github/actions/connect-wireguard
+        with:
+          client_key: ${{ secrets.wg_client_key }}
+          client_vpn_ip: ${{ secrets.wg_client_vpn_ip }}
+          host_public_key: ${{ secrets.wg_host_pubkey }}
+          host_endpoint: ${{ secrets.wg_host_endpoint }}
+          vpn_subnet: ${{ secrets.wg_vpn_subnet }}
+
+      - name: Configure SSH auth
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh/ && chmod 700 ~/.ssh/
+          touch ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts
+          echo "$SSH_HOSTKEY" > ~/.ssh/known_hosts
+          echo "StrictHostKeyChecking=yes" >> ~/.ssh/config
+          eval $(ssh-agent -a "$SSH_AUTH_SOCK")
+          ssh-add -q - <<< "$SSH_KEY"
+        env:
+          SSH_HOSTKEY: ${{ secrets.ssh_host_pubkey }}
+          SSH_KEY: ${{ secrets.ssh_private_key }}
+
+      - name: Copy configuration override files from server
+        shell: bash
+        run: rsync -v --ignore-missing-args "${SSH_ID}:${WORKING_DIR}/"{.env,compose.override.yml} ./
+
+      - name: Build images locally
+        shell: bash
+        run: docker compose build
+
+      - name: Run images on remote
+        shell: bash
+        run: |
+          docker context create remote-server --docker "host=ssh://${SSH_ID}"
+          IMAGES=$(docker compose config --format json | jq -r '
+            .name as $proj | .services | to_entries[] | select(.value.build != null)
+            | .value.image // "\($proj)-\(.key):latest"')
+          docker save $IMAGES | docker --context=remote-server load
+          docker --context=remote-server compose up --remove-orphans --detach

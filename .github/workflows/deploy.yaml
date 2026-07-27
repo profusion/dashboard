@@ -57,10 +57,10 @@ jobs:
         fi
 
   deploy:
-    uses: ./.github/workflows/deploy-pre-built.yaml
+    uses: ./.github/workflows/deploy-from-source.yaml
     with:
       ref: ${{ github.sha }}
-      working_dir: ${{ inputs.working_dir || format('{0}-pre-built', github.ref_name) }}
+      working_dir: ${{ inputs.working_dir || format('{0}-from-source', github.ref_name) }}
     secrets:
       ssh_user: ${{ secrets.SSH_USER }}
       ssh_host_address: ${{ secrets.SSH_HOST_ADDRESS }}
