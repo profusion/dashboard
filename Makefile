@@ -40,21 +40,21 @@ ci: ## Reproduce full CI pipeline (lint + build + test + integration)
 	$(MAKE) build
 	$(MAKE) test
 	@trap 'docker compose -f docker-compose.test.yml down --volumes --remove-orphans' EXIT; \
-	docker compose -f docker-compose.test.yml up test_db redis -d && \
+	docker compose -f docker-compose.test.yml up test_db redis -d --wait && \
 	docker compose -f docker-compose.test.yml run --rm test_backend python manage.py migrate && \
 	docker compose -f docker-compose.test.yml run --rm test_backend python manage.py seed_test_data --clear --yes && \
-	docker compose -f docker-compose.test.yml up test_backend -d && \
+	docker compose -f docker-compose.test.yml up test_backend -d --wait && \
 	sleep 5 && \
 	cd $(BACKEND_DIR) && TEST_BASE_URL=http://localhost:8001 poetry run pytest -m integration --use-local-db --run-all --cov=kernelCI_app --cov=kernelCI_cache --cov-report=term-missing
 
 dev: ## Start development environment with docker-compose.dev.yml
-	docker compose -f docker-compose.dev.yml up -d
+	docker compose -f docker-compose.dev.yml up -d --wait
 
 dev-down: ## Stop development environment with docker-compose.dev.yml
 	docker compose -f docker-compose.dev.yml down
 
 dev-build: ## Start development environment and rebuild images
-	docker compose -f docker-compose.dev.yml up --build -d
+	docker compose -f docker-compose.dev.yml up --build -d --wait
 
 clean: ## Remove build artifacts and caches
 	cd $(DASHBOARD_DIR) && rm -rf node_modules dist
