@@ -16,12 +16,18 @@ describe('highlightCode', () => {
 
   it('Gets n fails', () => {
     const result = generateHighlightedCode(
-      'There was 1 fail\n' +
-        'Then there were 200 fails\n' +
-        'set -o pipefail\n' +
-        '# Totals: pass: fail: xfail: xp[ ] <LAVA_SIGNAL_TESTCASE TEST_CASE_ID=arm64_btitest RESULT=pass>',
+      'There was 1 fail\n' + 'Then there were 200 fails\n' + 'set -o pipefail',
     );
     expect(result.failCount).toBe(2);
+  });
+
+  it('Keeps highlighting kselftest totals with real failures', () => {
+    const result = generateHighlightedCode(
+      '# # Totals: pass:1 fail:2 xfail:0 xpass:0 skip:0 error:0\n' +
+        '[   12.345678] # Totals: pass:1 fail:0 xfail:0 xpass:0 skip:0 error:0',
+    );
+    expect(result.failCount).toBe(1);
+    expect(result.highlightCount).toBe(2);
   });
 
   it('Gets error:/errors: N', () => {

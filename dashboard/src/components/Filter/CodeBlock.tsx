@@ -168,9 +168,6 @@ export const generateHighlightedCode = (code: string): IHighlightedCode => {
   });
 
   newCode = newCode.replace(/^.*(error|\bfail).*$/gim, match => {
-    if (/^\s*# Totals:/i.test(match)) {
-      return match;
-    }
     const stripped = match.replace(/\w*error_mode|_0_errors/gi, '');
     if (!/^.*(error|\bfail).*$/im.test(stripped)) {
       return match;
