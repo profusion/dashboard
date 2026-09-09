@@ -219,7 +219,11 @@ const HardwareListingPage = ({
     () => (
       <MemoizedKcidevFooter
         commandGroup="hardwareListing"
-        args={{ cmdName: 'hardware list', origin: buildOrigin, json: true }}
+        args={{
+          cmdName: 'hardware list',
+          ...(buildOrigin ? { origin: buildOrigin } : {}),
+          json: true,
+        }}
       />
     ),
     [buildOrigin],
