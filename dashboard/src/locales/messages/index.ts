@@ -179,6 +179,7 @@ export const messages = {
       'This is an ongoing project.{br}' +
       `Please report bugs and suggestions to ${FEEDBACK_EMAIL_TO}.`,
     'global.redirecting': 'Redirecting...',
+    'global.reloadAndClearCache': 'Reload and clear cache',
     'global.repository': 'Repository',
     'global.search': 'Search',
     'global.seconds': 'sec',
@@ -196,6 +197,9 @@ export const messages = {
     'global.treeBranchHash': 'Tree / Branch / Hash',
     'global.trees': 'Trees',
     'global.underDevelopment': 'Under Development',
+    'global.unexpectedErrorReportAction':
+      'Report this error by {emailLink} or on {gitHubLink}.',
+    'global.unexpectedErrorReportIntro': 'Help us improve the dashboard.',
     'global.unknown': 'Unknown',
     'global.unknownArchitecture': 'Unknown architecture',
     'global.url': 'URL',
