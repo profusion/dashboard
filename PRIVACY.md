@@ -101,6 +101,19 @@ is **The Linux Foundation**. For privacy inquiries contact
 Third-party deployments are controlled by their respective operators, who are
 responsible for providing their own contact details.
 
+## Data controller and contact
+
+For the upstream instance at dashboard.kernelci.org, the data controller is
+kernelCI Project a Series of LF Projects, LLC, whose main privacy policy is
+available at https://lfprojects.org/policies/privacy-policy/ . For privacy
+inquiries contact privacy@lfprojects.org, or write to:
+
+LF Projects, LLC, Attn: Legal Department, 2810 N Church St, PMB 57274,
+Wilmington, DE 19802-4447, USA
+
+Third-party deployments are controlled by their respective operators, who are
+responsible for providing their own contact details.
+
 ## Changes
 
 We may update this policy as the service evolves. Changes are tracked in the
