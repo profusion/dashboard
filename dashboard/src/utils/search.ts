@@ -36,9 +36,7 @@ export const parseSearch = (searchStr: string): AnySchema => {
       (searchStr.includes(JSONChar) || searchStr.includes(encodeJSONChar))) ||
     isEncodedJSONArrayParam(searchStr)
   ) {
-    const parsedSearch = parseSearchWith(JSON.parse)(searchStr);
-    Object.setPrototypeOf(parsedSearch, Object.prototype);
-    return parsedSearch;
+    return { ...parseSearchWith(JSON.parse)(searchStr) };
   }
 
   const flattenedParsedSearch = qs.parse(searchStr, {
@@ -61,7 +59,6 @@ export const parseSearch = (searchStr: string): AnySchema => {
     },
   });
 
-  Object.setPrototypeOf(flattenedParsedSearch, Object.prototype);
   const minifiedParsedSearch = unflattenObject(
     flattenedParsedSearch,
     KEY_FLAT_CHAR,
@@ -122,11 +119,12 @@ export const unflattenObject = (
         if (isStringRecord(acc)) {
           if (index === keys.length - 1) {
             acc[part] = obj[key];
-          } else {
-            acc[part] = acc[part] || {};
+          } else if (!Object.prototype.hasOwnProperty.call(acc, part)) {
+            acc[part] = {};
           }
-          if (isStringRecord(acc[part]) || Array.isArray(acc[part])) {
-            return acc[part];
+          const next = acc[part];
+          if (isStringRecord(next) || Array.isArray(next)) {
+            return next;
           }
         }
         return acc;
