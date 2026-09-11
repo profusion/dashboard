@@ -36,7 +36,9 @@ export const parseSearch = (searchStr: string): AnySchema => {
       (searchStr.includes(JSONChar) || searchStr.includes(encodeJSONChar))) ||
     isEncodedJSONArrayParam(searchStr)
   ) {
-    return parseSearchWith(JSON.parse)(searchStr);
+    const parsedSearch = parseSearchWith(JSON.parse)(searchStr);
+    Object.setPrototypeOf(parsedSearch, Object.prototype);
+    return parsedSearch;
   }
 
   const flattenedParsedSearch = qs.parse(searchStr, {
