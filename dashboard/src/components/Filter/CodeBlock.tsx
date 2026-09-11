@@ -127,20 +127,6 @@ const HighlightCounts = ({
             defaultMessage={'Suspected error'}
           />
         </li>
-        <li className="flex gap-1">
-          <ColoredCircle
-            quantity={
-              highlightedCode.highlightCount -
-              highlightedCode.failCount -
-              highlightedCode.errorCount
-            }
-            backgroundClassName="bg-medium-gray"
-          />
-          <FormattedMessage
-            id="codeBlock.otherMatches"
-            defaultMessage={'Other matches'}
-          />
-        </li>
       </ul>
       <div className="flex items-center">
         <LiaInfoCircleSolid />
@@ -156,7 +142,6 @@ const HighlightCounts = ({
 };
 
 export const generateHighlightedCode = (code: string): IHighlightedCode => {
-  let highlights = 0;
   let fails = 0;
   let errors = 0;
 
@@ -168,11 +153,14 @@ export const generateHighlightedCode = (code: string): IHighlightedCode => {
   });
 
   newCode = newCode.replace(/^.*(error|\bfail).*$/gim, match => {
-    const stripped = match.replace(/\w*error_mode|_0_errors/gi, '');
+    // drops LAVA test names and zeroed counters (kselftest "fail:0 error:0" totals)
+    const stripped = match.replace(
+      /\w*error_mode|_0_errors|\b(?:fail|error)s?:\s*0+\b/gi,
+      '',
+    );
     if (!/^.*(error|\bfail).*$/im.test(stripped)) {
       return match;
     }
-    highlights++;
     if (
       // matches failed to/with, more than 0 fails/failed and no flags
       stripped.search(
@@ -215,11 +203,11 @@ export const generateHighlightedCode = (code: string): IHighlightedCode => {
       errors++;
       return '<span class="text-orange-500">' + match + '</span>';
     }
-    return '<span class="text-sky-600">' + match + '</span>';
+    return match;
   });
   return {
     highlightedCode: newCode,
-    highlightCount: highlights,
+    highlightCount: fails + errors,
     failCount: fails,
     errorCount: errors,
   };

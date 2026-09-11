@@ -21,13 +21,44 @@ describe('highlightCode', () => {
     expect(result.failCount).toBe(2);
   });
 
-  it('Keeps highlighting kselftest totals with real failures', () => {
+  it('Ignores kselftest totals with zero fail and error', () => {
+    const result = generateHighlightedCode(
+      '# Totals: pass:18 fail:0 xfail:0 xpass:0 skip:0 error:0',
+    );
+    expect(result.highlightCount).toBe(0);
+    expect(result.failCount).toBe(0);
+    expect(result.errorCount).toBe(0);
+  });
+
+  it('Ignores kselftest totals with only expected failures (xfail)', () => {
+    const result = generateHighlightedCode(
+      '# Totals: pass:1 fail:0 xfail:2 xpass:0 skip:0 error:0',
+    );
+    expect(result.highlightCount).toBe(0);
+  });
+
+  it('Highlights kselftest totals when fail is greater than zero', () => {
     const result = generateHighlightedCode(
       '# # Totals: pass:1 fail:2 xfail:0 xpass:0 skip:0 error:0\n' +
         '[   12.345678] # Totals: pass:1 fail:0 xfail:0 xpass:0 skip:0 error:0',
     );
     expect(result.failCount).toBe(1);
-    expect(result.highlightCount).toBe(2);
+    expect(result.highlightCount).toBe(1);
+  });
+
+  it('Highlights kselftest totals when error is greater than zero', () => {
+    const result = generateHighlightedCode(
+      '# Totals: pass:1 fail:0 xfail:0 xpass:0 skip:0 error:2',
+    );
+    expect(result.errorCount).toBe(1);
+    expect(result.highlightCount).toBe(1);
+  });
+
+  it('Highlights real failures interleaved with a zeroed totals line', () => {
+    const result = generateHighlightedCode(
+      '[   99.3] # Totals: pass:18 fail:0 error:0 [   99.4] pci 0000:31:00.0: BAR 0: failed to assign',
+    );
+    expect(result.failCount).toBe(1);
   });
 
   it('Gets error:/errors: N', () => {
@@ -40,7 +71,7 @@ describe('highlightCode', () => {
     const testString = 'E summary was error: 0\n' + 'and then errors: 0';
     const result = generateHighlightedCode(testString);
     expect(result.errorCount).toBe(0);
-    expect(result.highlightCount).toBe(2);
+    expect(result.highlightCount).toBe(0);
   });
 
   it('Gets fail:/fails:/failed: N', () => {
@@ -55,7 +86,7 @@ describe('highlightCode', () => {
       'Summary was fail: 0\n' + 'and then fails: 0\n' + 'and finally failed: 0';
     const result = generateHighlightedCode(testString);
     expect(result.failCount).toBe(0);
-    expect(result.highlightCount).toBe(3);
+    expect(result.highlightCount).toBe(0);
   });
 
   it('Gets failed to/with', () => {
@@ -78,21 +109,21 @@ describe('highlightCode', () => {
     const testString = 'Summary was pass:5 fail:0';
     const result = generateHighlightedCode(testString);
     expect(result.failCount).toBe(0);
-    expect(result.highlightCount).toBe(1);
+    expect(result.highlightCount).toBe(0);
   });
 
   it('Does not consider backward count on error', () => {
     const testString = 'E summary was pass:5 error:0';
     const result = generateHighlightedCode(testString);
     expect(result.errorCount).toBe(0);
-    expect(result.highlightCount).toBe(1);
+    expect(result.highlightCount).toBe(0);
   });
 
   it('Ignores ignore errors', () => {
     const testString = 'Ignore error in the next command';
     const result = generateHighlightedCode(testString);
     expect(result.errorCount).toBe(0);
-    expect(result.highlightCount).toBe(1);
+    expect(result.highlightCount).toBe(0);
   });
 
   it('Considers the result:fail', () => {

@@ -41,7 +41,6 @@ export const messages = {
     'buildTab.buildStatus': 'Build status',
     'codeBlock.highlightsTooltip':
       'Heuristic keyword search in the log — counts may not match the test status',
-    'codeBlock.otherMatches': 'Other matches',
     'codeBlock.suspectedError': 'Suspected error',
     'codeBlock.suspectedFail': 'Suspected fail',
     'commonDetails.artifacts': 'Artifacts',
