@@ -305,6 +305,22 @@ describe('parseSearch', () => {
     );
     expect(parseSearch(JSONNestedObjectStringify)).toStrictEqual(nestedObject);
   });
+
+  it('does not pollute Object.prototype via qs path __proto__ keys', () => {
+    const marker = `__proto__PollutionTest_${Date.now()}`;
+
+    parseSearch(`?__proto__|${marker}=yes&o=maestro`);
+
+    expect(Object.prototype).not.toHaveProperty(marker);
+  });
+
+  it('does not pollute Object.prototype via JSON path __proto__ keys', () => {
+    const marker = `__proto__JsonPollutionTest_${Date.now()}`;
+
+    parseSearch(`?__proto__={"${marker}":"yes"}&o=maestro`);
+
+    expect(Object.prototype).not.toHaveProperty(marker);
+  });
 });
 
 describe('stringifySearch', () => {
