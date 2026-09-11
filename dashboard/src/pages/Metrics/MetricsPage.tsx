@@ -203,7 +203,7 @@ function PeriodSelector({
   const { formatMessage } = useIntl();
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center justify-end gap-2">
       <span className="text-sm font-medium text-gray-600">
         {formatMessage({ id: 'metricsPage.periodLabel' })}
       </span>
@@ -233,11 +233,11 @@ function CoverageSection({
   return (
     <section>
       <h2 className="mb-4 text-lg font-semibold text-gray-900">Coverage</h2>
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {metrics.map(metric => (
           <div
             key={metric.label}
-            className="rounded-lg border border-gray-200 bg-white p-4"
+            className="min-w-0 rounded-lg border border-gray-200 bg-white p-4"
           >
             <div className="text-sm font-medium text-gray-500">
               {metric.label}
@@ -247,7 +247,7 @@ function CoverageSection({
             </div>
             <div
               className={cn(
-                'mt-1 text-sm',
+                'mt-1 text-sm break-words',
                 deltaColor(metric.current, metric.previous),
               )}
             >
@@ -434,7 +434,7 @@ function TopRegressionsSection({
                     {idx + 1}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <span className="text-sm text-gray-900">
+                    <span className="text-sm break-words text-gray-900">
                       {issue.comment}
                     </span>
                     <span className="ml-2 text-xs text-gray-500">
@@ -567,10 +567,8 @@ export const MetricsPage = (): JSX.Element => {
   const labs = data ? getLabActivity(data) : [];
 
   return (
-    <div className="flex flex-col gap-8 pb-8">
-      <div className="flex justify-end">
-        <PeriodSelector activeDays={activeDays} onChange={setActiveDays} />
-      </div>
+    <div className="flex min-w-0 flex-col gap-8 pb-8">
+      <PeriodSelector activeDays={activeDays} onChange={setActiveDays} />
 
       <QuerySwitcher status={status} data={data} error={error}>
         <CoverageSection metrics={coverageMetrics} />
